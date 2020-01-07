@@ -34,28 +34,49 @@ class EmuWindow;
 }
 
 class ShaderProgramManager;
+//We should not use virtual functions, that's would be slowly.
+//#define base_on_rasterizer_interface
+
+#ifdef base_on_rasterizer_interface
+#define OVERRIDE override
+#else
+#define OVERRIDE
+#endif
 
 namespace OpenGL {
 
-class RasterizerOpenGL : public VideoCore::RasterizerInterface {
+class RasterizerOpenGL
+#if base_on_rasterizer_interface
+    : public VideoCore::RasterizerInterface
+#endif
+{
 public:
     explicit RasterizerOpenGL(Frontend::EmuWindow& renderer);
-    ~RasterizerOpenGL() override;
+    ~RasterizerOpenGL() OVERRIDE;
 
     void AddTriangle(const Pica::Shader::OutputVertex& v0, const Pica::Shader::OutputVertex& v1,
-                     const Pica::Shader::OutputVertex& v2) override;
-    void DrawTriangles() override;
-    void NotifyPicaRegisterChanged(u32 id) override;
-    void FlushAll() override;
-    void FlushRegion(PAddr addr, u32 size) override;
-    void InvalidateRegion(PAddr addr, u32 size) override;
-    void FlushAndInvalidateRegion(PAddr addr, u32 size) override;
-    bool AccelerateDisplayTransfer(const GPU::Regs::DisplayTransferConfig& config) override;
-    bool AccelerateTextureCopy(const GPU::Regs::DisplayTransferConfig& config) override;
-    bool AccelerateFill(const GPU::Regs::MemoryFillConfig& config) override;
+                     const Pica::Shader::OutputVertex& v2) OVERRIDE;
+    void DrawTriangles() OVERRIDE;
+    void NotifyPicaRegisterChanged(u32 id) OVERRIDE;
+    void FlushAll() OVERRIDE;
+    void FlushRegion(PAddr addr, u32 size) OVERRIDE;
+    void InvalidateRegion(PAddr addr, u32 size) OVERRIDE;
+    void FlushAndInvalidateRegion(PAddr addr, u32 size) OVERRIDE;
+    bool AccelerateDisplayTransfer(const GPU::Regs::DisplayTransferConfig& config) OVERRIDE;
+    bool AccelerateTextureCopy(const GPU::Regs::DisplayTransferConfig& config) OVERRIDE;
+    bool AccelerateFill(const GPU::Regs::MemoryFillConfig& config) OVERRIDE;
     bool AccelerateDisplay(const GPU::Regs::FramebufferConfig& config, PAddr framebuffer_addr,
-                           u32 pixel_stride, ScreenInfo& screen_info) override;
-    bool AccelerateDrawBatch(bool is_indexed) override;
+                           u32 pixel_stride, ScreenInfo& screen_info) OVERRIDE;
+    bool AccelerateDrawBatch(bool is_indexed) OVERRIDE;
+
+    template <u32 _bytes>
+    int IsInSurfaceCache(PAddr addr) {
+        return res_cache.IsInSurfaceCache<_bytes>(addr);
+    }
+    template <u32 _bytes>
+    int IsInDirtyCache(PAddr addr) {
+        return res_cache.IsInDirtyCache<_bytes>(addr);
+    }
 
 private:
     struct SamplerInfo {

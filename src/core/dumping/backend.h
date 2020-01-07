@@ -17,12 +17,12 @@ namespace VideoDumper {
  */
 class VideoFrame {
 public:
-    std::size_t width;
-    std::size_t height;
+    u32 width;
+    u32 height;
     u32 stride;
     std::vector<u8> data;
 
-    VideoFrame(std::size_t width_ = 0, std::size_t height_ = 0, u8* data_ = nullptr);
+    VideoFrame(u32 width_ = 0, u32 height_ = 0, u8* data_ = nullptr);
 };
 
 class Backend {

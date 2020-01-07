@@ -7,6 +7,9 @@
 #include <cstddef>
 #include <cstring>
 #include "common/cityhash.h"
+#define XXH_STATIC_LINKING_ONLY
+#define XXH_INLINE_ALL
+#include "common/xxhash.h"
 #include "common/common_types.h"
 
 namespace Common {
@@ -18,7 +21,8 @@ namespace Common {
  * @returns 64-bit hash value that was computed over the data block
  */
 static inline u64 ComputeHash64(const void* data, std::size_t len) {
-    return CityHash64(static_cast<const char*>(data), len);
+    //return CityHash64(static_cast<const char*>(data), len);
+    return XXH64(data, len, 0);
 }
 
 /**

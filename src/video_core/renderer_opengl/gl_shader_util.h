@@ -35,4 +35,8 @@ GLuint LoadShader(const char* source, GLenum type);
  */
 GLuint LoadProgram(bool separable_program, const std::vector<GLuint>& shaders);
 
+void GetProgramBin(GLuint program_id, std::vector<GLubyte>& bin);
+
+GLuint LoadProgramBin(const std::vector<GLubyte>& bin);
+
 } // namespace OpenGL

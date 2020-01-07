@@ -31,7 +31,7 @@ static const int kBlockSize = 0x200; ///< Size of ExeFS blocks (in bytes)
  */
 static void ApplyIPS(std::vector<u8>& ips, std::vector<u8>& buffer) {
     u32 cursor = 5;
-    u32 patch_length = ips.size() - 3;
+    u32 patch_length = (u32)ips.size() - 3;
     std::string ips_header(ips.begin(), ips.begin() + 5);
 
     if (ips_header != "PATCH") {
@@ -67,7 +67,7 @@ static void ApplyIPS(std::vector<u8>& ips, std::vector<u8>& buffer) {
             return;
 
         std::memcpy(&buffer[offset], &ips[cursor + 5], length);
-        cursor += length + 5;
+        cursor += (u32)length + 5;
     }
 }
 

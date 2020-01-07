@@ -437,7 +437,8 @@ void ThreadManager::Reschedule() {
         LOG_TRACE(Kernel, "context switch idle -> {}", next->GetObjectId());
     }
 
-    SwitchContext(next);
+    if (cur != next)
+        SwitchContext(next);
 }
 
 void Thread::SetWaitSynchronizationResult(ResultCode result) {

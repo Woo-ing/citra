@@ -14,7 +14,7 @@
 
 namespace Service::Y2R {
 
-static const CoefficientSet standard_coefficients[4] = {
+const CoefficientSet Y2R_U::standard_coefficients[4] = {
     {{0x100, 0x166, 0xB6, 0x58, 0x1C5, -0x166F, 0x10EE, -0x1C5B}}, // ITU_Rec601
     {{0x100, 0x193, 0x77, 0x2F, 0x1DB, -0x1933, 0xA7C, -0x1D51}},  // ITU_Rec709
     {{0x12A, 0x198, 0xD0, 0x64, 0x204, -0x1BDE, 0x10F2, -0x229B}}, // ITU_Rec601_Scaling
@@ -52,12 +52,13 @@ ResultCode ConversionConfiguration::SetInputLines(u16 lines) {
 ResultCode ConversionConfiguration::SetStandardCoefficient(
     StandardCoefficient standard_coefficient) {
     std::size_t index = static_cast<std::size_t>(standard_coefficient);
-    if (index >= ARRAY_SIZE(standard_coefficients)) {
+    if (index >= ARRAY_SIZE(Y2R_U::standard_coefficients)) {
         return ResultCode(ErrorDescription::InvalidEnumValue, ErrorModule::CAM,
                           ErrorSummary::InvalidArgument, ErrorLevel::Usage); // 0xE0E053ED
     }
 
-    std::memcpy(coefficients.data(), standard_coefficients[index].data(), sizeof(coefficients));
+    // std::memcpy(coefficients.data(), standard_coefficients[index].data(), sizeof(coefficients));
+    coefficient = standard_coefficient;
     return RESULT_SUCCESS;
 }
 
@@ -155,7 +156,7 @@ void Y2R_U::SetSpacialDithering(Kernel::HLERequestContext& ctx) {
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(RESULT_SUCCESS);
 
-    LOG_WARNING(Service_Y2R, "(STUBBED) called");
+    LOG_DEBUG(Service_Y2R, "called spacial_dithering={}", spacial_dithering_enabled);
 }
 
 void Y2R_U::GetSpacialDithering(Kernel::HLERequestContext& ctx) {
@@ -165,7 +166,7 @@ void Y2R_U::GetSpacialDithering(Kernel::HLERequestContext& ctx) {
     rb.Push(RESULT_SUCCESS);
     rb.Push(spacial_dithering_enabled);
 
-    LOG_WARNING(Service_Y2R, "(STUBBED) called");
+    LOG_DEBUG(Service_Y2R, "calld spacial_dithering={}", spacial_dithering_enabled);
 }
 
 void Y2R_U::SetTemporalDithering(Kernel::HLERequestContext& ctx) {
@@ -175,7 +176,7 @@ void Y2R_U::SetTemporalDithering(Kernel::HLERequestContext& ctx) {
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(RESULT_SUCCESS);
 
-    LOG_WARNING(Service_Y2R, "(STUBBED) called");
+    LOG_DEBUG(Service_Y2R, "calld temporal_dithering={}", temporal_dithering_enabled);
 }
 
 void Y2R_U::GetTemporalDithering(Kernel::HLERequestContext& ctx) {
@@ -185,7 +186,7 @@ void Y2R_U::GetTemporalDithering(Kernel::HLERequestContext& ctx) {
     rb.Push(RESULT_SUCCESS);
     rb.Push(temporal_dithering_enabled);
 
-    LOG_WARNING(Service_Y2R, "(STUBBED) called");
+    LOG_DEBUG(Service_Y2R, "calld temporal_dithering={}", temporal_dithering_enabled);
 }
 
 void Y2R_U::SetTransferEndInterrupt(Kernel::HLERequestContext& ctx) {
@@ -195,7 +196,7 @@ void Y2R_U::SetTransferEndInterrupt(Kernel::HLERequestContext& ctx) {
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(RESULT_SUCCESS);
 
-    LOG_WARNING(Service_Y2R, "(STUBBED) called");
+    LOG_DEBUG(Service_Y2R, "calld transfer_end_interrupt={}", transfer_end_interrupt_enabled);
 }
 
 void Y2R_U::GetTransferEndInterrupt(Kernel::HLERequestContext& ctx) {
@@ -205,7 +206,7 @@ void Y2R_U::GetTransferEndInterrupt(Kernel::HLERequestContext& ctx) {
     rb.Push(RESULT_SUCCESS);
     rb.Push(transfer_end_interrupt_enabled);
 
-    LOG_WARNING(Service_Y2R, "(STUBBED) called");
+    LOG_DEBUG(Service_Y2R, "calld transfer_end_interrupt={}", transfer_end_interrupt_enabled);
 }
 
 void Y2R_U::GetTransferEndEvent(Kernel::HLERequestContext& ctx) {
@@ -407,25 +408,36 @@ void Y2R_U::GetInputLines(Kernel::HLERequestContext& ctx) {
 }
 
 void Y2R_U::SetCoefficient(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x1E, 4, 0);
+    IPC::RequestParser rp(ctx, 0x1E, 1, 0);
 
-    rp.PopRaw<CoefficientSet>(conversion.coefficients);
+    u32 index = rp.Pop<u32>();
+    if (index < ARRAY_SIZE(standard_coefficients)) {
+        conversion.coefficient = static_cast<StandardCoefficient>(index);
 
-    IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
-    rb.Push(RESULT_SUCCESS);
+        IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+        rb.Push(RESULT_SUCCESS);
 
-    LOG_DEBUG(Service_Y2R, "called coefficients=[{:X}, {:X}, {:X}, {:X}, {:X}, {:X}, {:X}, {:X}]",
-              conversion.coefficients[0], conversion.coefficients[1], conversion.coefficients[2],
-              conversion.coefficients[3], conversion.coefficients[4], conversion.coefficients[5],
-              conversion.coefficients[6], conversion.coefficients[7]);
+        const CoefficientSet& coefficients = standard_coefficients[index];
+
+        LOG_DEBUG(Service_Y2R,
+                  "called coefficients=[{:X}, {:X}, {:X}, {:X}, {:X}, {:X}, {:X}, {:X}]",
+                  coefficients[0], coefficients[1], coefficients[2], coefficients[3],
+                  coefficients[4], coefficients[5], coefficients[6], coefficients[7]);
+    } else {
+        IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
+        rb.Push(ResultCode(ErrorDescription::InvalidEnumValue, ErrorModule::CAM,
+                           ErrorSummary::NotSupported, ErrorLevel::Usage));
+        LOG_ERROR(Service_Y2R, "conversion.coefficient is invalid!", index);
+    }
 }
 
 void Y2R_U::GetCoefficient(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx, 0x1F, 0, 0);
 
-    IPC::RequestBuilder rb = rp.MakeBuilder(5, 0);
+    u32 index = static_cast<u32>(conversion.coefficient);
+    IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     rb.Push(RESULT_SUCCESS);
-    rb.PushRaw(conversion.coefficients);
+    rb.Push(index);
 
     LOG_DEBUG(Service_Y2R, "called");
 }
@@ -445,9 +457,9 @@ void Y2R_U::GetStandardCoefficient(Kernel::HLERequestContext& ctx) {
     u32 index = rp.Pop<u32>();
 
     if (index < ARRAY_SIZE(standard_coefficients)) {
-        IPC::RequestBuilder rb = rp.MakeBuilder(5, 0);
+        IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
         rb.Push(RESULT_SUCCESS);
-        rb.PushRaw(standard_coefficients[index]);
+        rb.Push(index);
 
         LOG_DEBUG(Service_Y2R, "called standard_coefficient={} ", index);
     } else {
@@ -595,7 +607,7 @@ void Y2R_U::DriverInitialize(Kernel::HLERequestContext& ctx) {
     conversion.output_format = OutputFormat::RGBA8;
     conversion.rotation = Rotation::None;
     conversion.block_alignment = BlockAlignment::Linear;
-    conversion.coefficients.fill(0);
+    conversion.coefficient = StandardCoefficient::ITU_Rec601;
     conversion.SetInputLineWidth(1024);
     conversion.SetInputLines(1024);
     conversion.alpha = 0;

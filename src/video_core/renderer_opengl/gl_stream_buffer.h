@@ -32,6 +32,8 @@ public:
 
     void Unmap(GLsizeiptr size);
 
+    void reset();
+
 private:
     OGLBuffer gl_buffer;
     GLenum gl_target;

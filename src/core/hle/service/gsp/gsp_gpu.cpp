@@ -21,8 +21,7 @@
 #include "video_core/debug_utils/debug_utils.h"
 #include "video_core/gpu_debugger.h"
 
-// Main graphics debugger object - TODO: Here is probably not the best place for this
-GraphicsDebugger g_debugger;
+GraphicsDebugger* GraphicsDebugger::ms_instance = NULL;
 
 namespace Service::GSP {
 
@@ -633,7 +632,9 @@ void GSP_GPU::TriggerCmdReqQueue(Kernel::HLERequestContext& ctx) {
 
         // Iterate through each command...
         for (unsigned i = 0; i < command_buffer->number_commands; ++i) {
-            g_debugger.GXCommandProcessed((u8*)&command_buffer->commands[i]);
+            if (GraphicsDebugger::Instance() != NULL) {
+                GraphicsDebugger::Instance()->GXCommandProcessed((u8*)&command_buffer->commands[i]);
+            }
 
             // Decode and execute command
             ExecuteCommand(command_buffer->commands[i], thread_id);

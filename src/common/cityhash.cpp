@@ -191,7 +191,27 @@ static uint64 HashLen33to64(const char* s, std::size_t len) {
     return b + x;
 }
 
+uint64 Times33Hash64(const char* s, std::size_t len) {
+    uint64 hash = k1;
+    const char* aligned_s = (const char*)((u64)(s + 7) & (u64)(~7)); // 64bit aligned
+    const char* aligned_e = (const char*)((u64)(s + len) & (u64)(~7)); // 64bit aligned
+    const char* p = s;
+    for (; p < aligned_s; ++p) {
+        hash +=(hash<<5) + (uint64)*p;
+    }
+    for (; p < aligned_e; p+=64) {
+        hash += (hash << 5) + *(uint64*)p;
+    }
+    for (; p < s + len; ++p) {
+        hash += (hash << 5) + (uint64)*p;
+    }
+    return hash;
+}
+
 uint64 CityHash64(const char* s, std::size_t len) {
+    // try times33 hash to improve speed;
+    //return Times33Hash64(s, len);
+
     if (len <= 32) {
         if (len <= 16) {
             return HashLen0to16(s, len);

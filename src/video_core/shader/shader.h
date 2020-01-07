@@ -214,17 +214,17 @@ struct ShaderSetup {
         swizzle_data_hash_dirty = true;
     }
 
-    u64 GetProgramCodeHash() {
+    u64 GetProgramCodeHash(size_t size = MAX_PROGRAM_CODE_LENGTH) {
         if (program_code_hash_dirty) {
-            program_code_hash = Common::ComputeHash64(&program_code, sizeof(program_code));
+            program_code_hash = Common::ComputeHash64(&program_code, size);
             program_code_hash_dirty = false;
         }
         return program_code_hash;
     }
 
-    u64 GetSwizzleDataHash() {
+    u64 GetSwizzleDataHash(size_t size = MAX_SWIZZLE_DATA_LENGTH) {
         if (swizzle_data_hash_dirty) {
-            swizzle_data_hash = Common::ComputeHash64(&swizzle_data, sizeof(swizzle_data));
+            swizzle_data_hash = Common::ComputeHash64(&swizzle_data, size);
             swizzle_data_hash_dirty = false;
         }
         return swizzle_data_hash;

@@ -27,6 +27,7 @@
 #include "video_core/shader/shader.h"
 #include "video_core/vertex_loader.h"
 #include "video_core/video_core.h"
+#include "video_core/renderer_opengl/gl_rasterizer.h"
 
 namespace Pica::CommandProcessor {
 
@@ -108,7 +109,7 @@ static void WriteUniformFloatReg(ShaderRegs& config, Shader::ShaderSetup& setup,
     }
 }
 
-static void WritePicaReg(u32 id, u32 value, u32 mask) {
+static void _fastcall WritePicaReg(u32 id, u32 value, u32 mask) {
     auto& regs = g_state.regs;
 
     if (id >= Regs::NUM_REGS) {
@@ -310,7 +311,6 @@ static void WritePicaReg(u32 id, u32 value, u32 mask) {
         // loaded.
         // Later, these can be compiled and cached.
         const u32 base_address = regs.pipeline.vertex_attributes.GetPhysicalBaseAddress();
-        VertexLoader loader(regs.pipeline);
         Shader::OutputVertex::ValidateSemantics(regs.rasterizer);
 
         // Load vertices
@@ -341,12 +341,14 @@ static void WritePicaReg(u32 id, u32 value, u32 mask) {
         // Simple circular-replacement vertex cache
         // The size has been tuned for optimal balance between hit-rate and the cost of lookup
         const std::size_t VERTEX_CACHE_SIZE = 32;
-        std::array<bool, VERTEX_CACHE_SIZE> vertex_cache_valid{};
-        std::array<u16, VERTEX_CACHE_SIZE> vertex_cache_ids;
-        std::array<Shader::AttributeBuffer, VERTEX_CACHE_SIZE> vertex_cache;
+        static std::array<bool, VERTEX_CACHE_SIZE> vertex_cache_valid{};
+        static std::array<u16, VERTEX_CACHE_SIZE> vertex_cache_ids;
+        static std::array<Shader::AttributeBuffer, VERTEX_CACHE_SIZE> vertex_cache;
         Shader::AttributeBuffer vs_output;
+        vertex_cache_valid.fill(false);
+        vertex_cache_ids.fill(0);
 
-        unsigned int vertex_cache_pos = 0;
+            unsigned int vertex_cache_pos = 0;
 
         auto* shader_engine = Shader::GetEngine();
         Shader::UnitState shader_unit;
@@ -390,6 +392,7 @@ static void WritePicaReg(u32 id, u32 value, u32 mask) {
             if (!vertex_cache_hit) {
                 // Initialize data for the current vertex
                 Shader::AttributeBuffer input;
+                VertexLoader loader(regs.pipeline);
                 loader.LoadVertex(base_address, index, vertex, input, memory_accesses);
 
                 // Send to vertex shader

@@ -44,6 +44,21 @@ public:
         friend class GraphicsDebugger;
     };
 
+    static GraphicsDebugger* CreateInstance() {
+        ms_instance = new GraphicsDebugger();
+        return ms_instance;
+    }
+    static GraphicsDebugger* Instance() {
+        return ms_instance;
+    }
+    static void DestroyInstance() {
+        if (ms_instance) {
+            delete ms_instance;
+            ms_instance = NULL;
+        }
+    }
+    static GraphicsDebugger* ms_instance;
+
     void GXCommandProcessed(u8* command_data) {
         if (observers.empty())
             return;

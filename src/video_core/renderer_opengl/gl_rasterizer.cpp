@@ -193,7 +193,7 @@ void RasterizerOpenGL::SyncEntireState() {
     SyncCombinerColor();
     auto& tev_stages = Pica::g_state.regs.texturing.GetTevStages();
     for (std::size_t index = 0; index < tev_stages.size(); ++index)
-        SyncTevConstColor(index, tev_stages[index]);
+        SyncTevConstColor((int)index, tev_stages[index]);
 
     SyncGlobalAmbient();
     for (unsigned light_index = 0; light_index < 8; light_index++) {
@@ -268,18 +268,34 @@ RasterizerOpenGL::VertexArrayInfo RasterizerOpenGL::AnalyzeVertexArray(bool is_i
     if (is_indexed) {
         const auto& index_info = regs.pipeline.index_array;
         PAddr address = vertex_attributes.GetPhysicalBaseAddress() + index_info.offset;
-        const u8* index_address_8 = VideoCore::g_memory->GetPhysicalPointer(address);
-        const u16* index_address_16 = reinterpret_cast<const u16*>(index_address_8);
-        bool index_u16 = index_info.format != 0;
 
-        vertex_min = 0xFFFF;
-        vertex_max = 0;
-        std::size_t size = regs.pipeline.num_vertices * (index_u16 ? 2 : 1);
-        res_cache.FlushRegion(address, size, nullptr);
-        for (u32 index = 0; index < regs.pipeline.num_vertices; ++index) {
-            u32 vertex = index_u16 ? index_address_16[index] : index_address_8[index];
-            vertex_min = std::min(vertex_min, vertex);
-            vertex_max = std::max(vertex_max, vertex);
+        bool index_u16 = index_info.format != 0;
+        if (index_u16) {
+            const u16* index_address_16 =
+                reinterpret_cast<const u16*>(VideoCore::g_memory->GetPhysicalPointer(address));
+            res_cache.FlushRegion(address, 2, nullptr);
+            vertex_min = vertex_max = index_address_16[0];
+            for (u32 index = 1; index < regs.pipeline.num_vertices; ++index) {
+                u32 vertex = index_address_16[index];
+                if (vertex < vertex_min) {
+                    vertex_min = vertex;
+                }
+                else if (vertex > vertex_max) {
+                    vertex_max = vertex;
+                }
+            }
+        } else {
+            const u8* index_address_8 = VideoCore::g_memory->GetPhysicalPointer(address);
+            res_cache.FlushRegion(address, 1, nullptr);
+            vertex_min = vertex_max = index_address_8[0];
+            for (u32 index = 1; index < regs.pipeline.num_vertices; ++index) {
+                u32 vertex = index_address_8[index];
+                if (vertex < vertex_min) {
+                    vertex_min = vertex;
+                } else if (vertex > vertex_max) {
+                    vertex_max = vertex;
+                }
+            }
         }
     } else {
         vertex_min = regs.pipeline.vertex_offset;
@@ -316,23 +332,27 @@ void RasterizerOpenGL::SetupVertexArray(u8* array_ptr, GLintptr buffer_offset,
         }
 
         u32 offset = 0;
+        std::array<u32, 12> components = loader.GetComponents();
+        std::array<u32, 12> nums = vertex_attributes.GetNumElements();
+        std::array<Pica::PipelineRegs::VertexAttributeFormat, 12> formats =
+            vertex_attributes.GetFormats();
         for (u32 comp = 0; comp < loader.component_count && comp < 12; ++comp) {
-            u32 attribute_index = loader.GetComponent(comp);
+            u32 attribute_index = components[comp];
             if (attribute_index < 12) {
-                if (vertex_attributes.GetNumElements(attribute_index) != 0) {
-                    offset = Common::AlignUp(
-                        offset, vertex_attributes.GetElementSizeInBytes(attribute_index));
+                Pica::PipelineRegs::VertexAttributeFormat format = formats[attribute_index];
+                u32 size = nums[attribute_index] + 1;
+                if (size != 0) {
+                    offset =
+                        Common::AlignUp(offset, vertex_attributes.GetElementSizeInBytes(format));
 
                     u32 input_reg = regs.vs.GetRegisterForAttribute(attribute_index);
-                    GLint size = vertex_attributes.GetNumElements(attribute_index);
-                    GLenum type = vs_attrib_types[static_cast<u32>(
-                        vertex_attributes.GetFormat(attribute_index))];
+                    GLenum type = vs_attrib_types[static_cast<u32>(format)];
                     GLsizei stride = loader.byte_count;
                     glVertexAttribPointer(input_reg, size, type, GL_FALSE, stride,
                                           reinterpret_cast<GLvoid*>(buffer_offset + offset));
                     enable_attributes[input_reg] = true;
 
-                    offset += vertex_attributes.GetStride(attribute_index);
+                    offset += vertex_attributes.GetStride(format, size);
                 }
             } else {
                 // Attribute ids 12, 13, 14 and 15 signify 4, 8, 12 and 16-byte paddings,
@@ -349,7 +369,8 @@ void RasterizerOpenGL::SetupVertexArray(u8* array_ptr, GLintptr buffer_offset,
         u32 data_size = loader.byte_count * vertex_num;
 
         res_cache.FlushRegion(data_addr, data_size, nullptr);
-        std::memcpy(array_ptr, VideoCore::g_memory->GetPhysicalPointer(data_addr), data_size);
+        u8* p = VideoCore::g_memory->GetPhysicalPointer(data_addr);
+        std::memcpy(array_ptr, p, data_size);
 
         array_ptr += data_size;
         buffer_offset += data_size;
@@ -358,15 +379,15 @@ void RasterizerOpenGL::SetupVertexArray(u8* array_ptr, GLintptr buffer_offset,
     for (std::size_t i = 0; i < enable_attributes.size(); ++i) {
         if (enable_attributes[i] != hw_vao_enabled_attributes[i]) {
             if (enable_attributes[i]) {
-                glEnableVertexAttribArray(i);
+                glEnableVertexAttribArray((GLuint)i);
             } else {
-                glDisableVertexAttribArray(i);
+                glDisableVertexAttribArray((GLuint)i);
             }
             hw_vao_enabled_attributes[i] = enable_attributes[i];
         }
 
         if (vertex_attributes.IsDefaultAttribute(i)) {
-            u32 reg = regs.vs.GetRegisterForAttribute(i);
+            u32 reg = regs.vs.GetRegisterForAttribute((u32)i);
             if (!enable_attributes[reg]) {
                 const auto& attr = Pica::g_state.input_default_attributes.attr[i];
                 glVertexAttrib4f(reg, attr.x.ToFloat32(), attr.y.ToFloat32(), attr.z.ToFloat32(),
@@ -391,6 +412,7 @@ bool RasterizerOpenGL::SetupGeometryShader() {
         return true;
     } else {
         LOG_ERROR(Render_OpenGL, "Accelerate draw doesn't support geometry shader");
+        return false;
     }
 }
 
@@ -802,7 +824,7 @@ bool RasterizerOpenGL::Draw(bool accelerate, bool is_indexed) {
                 vertex_buffer.Map(vertex_size, sizeof(HardwareVertex));
             std::memcpy(vbo, vertex_batch.data() + base_vertex, vertex_size);
             vertex_buffer.Unmap(vertex_size);
-            glDrawArrays(GL_TRIANGLES, offset / sizeof(HardwareVertex), (GLsizei)vertices);
+            glDrawArrays(GL_TRIANGLES, (GLint)(offset / sizeof(HardwareVertex)), (GLsizei)vertices);
         }
     }
 
@@ -1982,16 +2004,16 @@ void RasterizerOpenGL::SyncAndUploadLUTs() {
                     lighting_lut_data[index] = new_data;
                     std::memcpy(buffer + bytes_used, new_data.data(),
                                 new_data.size() * sizeof(GLvec2));
-                    uniform_block_data.data.lighting_lut_offset[index / 4][index % 4] =
-                        (offset + bytes_used) / sizeof(GLvec2);
+                    uniform_block_data.data.lighting_lut_offset[index >> 2][index & 3] =
+                        (GLint)((offset + bytes_used) / sizeof(GLvec2));
                     uniform_block_data.dirty = true;
                     bytes_used += new_data.size() * sizeof(GLvec2);
                 }
                 uniform_block_data.lighting_lut_dirty[index] = false;
             }
         }
+        uniform_block_data.lighting_lut_dirty_any = false;
     }
-    uniform_block_data.lighting_lut_dirty_any = false;
 
     // Sync the fog lut
     if (uniform_block_data.fog_lut_dirty || invalidate) {
@@ -2005,7 +2027,8 @@ void RasterizerOpenGL::SyncAndUploadLUTs() {
         if (new_data != fog_lut_data || invalidate) {
             fog_lut_data = new_data;
             std::memcpy(buffer + bytes_used, new_data.data(), new_data.size() * sizeof(GLvec2));
-            uniform_block_data.data.fog_lut_offset = (offset + bytes_used) / sizeof(GLvec2);
+            uniform_block_data.data.fog_lut_offset =
+                (GLint)((offset + bytes_used) / sizeof(GLvec2));
             uniform_block_data.dirty = true;
             bytes_used += new_data.size() * sizeof(GLvec2);
         }
@@ -2024,7 +2047,7 @@ void RasterizerOpenGL::SyncAndUploadLUTs() {
         if (new_data != lut_data || invalidate) {
             lut_data = new_data;
             std::memcpy(buffer + bytes_used, new_data.data(), new_data.size() * sizeof(GLvec2));
-            lut_offset = (offset + bytes_used) / sizeof(GLvec2);
+            lut_offset = (GLint)((offset + bytes_used) / sizeof(GLvec2));
             uniform_block_data.dirty = true;
             bytes_used += new_data.size() * sizeof(GLvec2);
         }
@@ -2065,7 +2088,8 @@ void RasterizerOpenGL::SyncAndUploadLUTs() {
         if (new_data != proctex_lut_data || invalidate) {
             proctex_lut_data = new_data;
             std::memcpy(buffer + bytes_used, new_data.data(), new_data.size() * sizeof(GLvec4));
-            uniform_block_data.data.proctex_lut_offset = (offset + bytes_used) / sizeof(GLvec4);
+            uniform_block_data.data.proctex_lut_offset =
+                (GLint)((offset + bytes_used) / sizeof(GLvec4));
             uniform_block_data.dirty = true;
             bytes_used += new_data.size() * sizeof(GLvec4);
         }
@@ -2087,7 +2111,7 @@ void RasterizerOpenGL::SyncAndUploadLUTs() {
             proctex_diff_lut_data = new_data;
             std::memcpy(buffer + bytes_used, new_data.data(), new_data.size() * sizeof(GLvec4));
             uniform_block_data.data.proctex_diff_lut_offset =
-                (offset + bytes_used) / sizeof(GLvec4);
+                (GLint)((offset + bytes_used) / sizeof(GLvec4));
             uniform_block_data.dirty = true;
             bytes_used += new_data.size() * sizeof(GLvec4);
         }

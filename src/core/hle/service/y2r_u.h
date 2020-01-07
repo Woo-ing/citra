@@ -100,7 +100,7 @@ struct ConversionConfiguration {
     BlockAlignment block_alignment;
     u16 input_line_width;
     u16 input_lines;
-    CoefficientSet coefficients;
+    StandardCoefficient coefficient;
     u8 padding;
     u16 alpha;
 
@@ -150,6 +150,8 @@ class Y2R_U final : public ServiceFramework<Y2R_U> {
 public:
     explicit Y2R_U(Core::System& system);
     ~Y2R_U() override;
+
+    static const CoefficientSet standard_coefficients[4];
 
 private:
     void SetInputFormat(Kernel::HLERequestContext& ctx);

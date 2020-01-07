@@ -78,9 +78,7 @@ layout (std140) uniform shader_data {
 };
 )";
 
-static std::string GetVertexInterfaceDeclaration(bool is_output, bool separable_shader) {
-    std::string out;
-
+static void GetVertexInterfaceDeclaration(bool is_output, bool separable_shader, std::string& out) {
     auto append_variable = [&](const char* var, int location) {
         if (separable_shader) {
             out += "layout (location=" + std::to_string(location) + ") ";
@@ -105,8 +103,6 @@ out gl_PerVertex {
 };
 )";
     }
-
-    return out;
 }
 
 PicaFSConfig PicaFSConfig::BuildFromRegs(const Pica::Regs& regs) {
@@ -675,7 +671,10 @@ static void WriteLighting(std::string& out, const PicaFSConfig& config) {
            "vec3 half_vector = vec3(0.0);\n"
            "float dot_product = 0.0;\n"
            "float clamp_highlights = 1.0;\n"
+           "float spot_atten = 1.0;\n"
+           "float dist_atten = 1.0;\n"
            "float geo_factor = 1.0;\n";
+    
 
     // Compute fragment normals and tangents
     auto Perturbation = [&]() {
@@ -715,6 +714,7 @@ static void WriteLighting(std::string& out, const PicaFSConfig& config) {
     out += "vec4 normalized_normquat = normalize(normquat);\n";
     out += "vec3 normal = quaternion_rotate(normalized_normquat, surface_normal);\n";
     out += "vec3 tangent = quaternion_rotate(normalized_normquat, surface_tangent);\n";
+    out += "vec3 normalized_view = normalize(view);\n";
 
     if (lighting.enable_shadow) {
         std::string shadow_texture = SampleTexture(config, lighting.shadow_selector);
@@ -737,11 +737,11 @@ static void WriteLighting(std::string& out, const PicaFSConfig& config) {
             break;
 
         case LightingRegs::LightingLutInput::VH:
-            index = std::string("dot(normalize(view), normalize(half_vector))");
+            index = std::string("dot(normalized_view, normalize(half_vector))");
             break;
 
         case LightingRegs::LightingLutInput::NV:
-            index = std::string("dot(normal, normalize(view))");
+            index = std::string("dot(normal, normalized_view)");
             break;
 
         case LightingRegs::LightingLutInput::LN:
@@ -800,7 +800,7 @@ static void WriteLighting(std::string& out, const PicaFSConfig& config) {
             out += "light_vector = normalize(" + light_src + ".position + view);\n";
 
         out += "spot_dir = " + light_src + ".spot_direction;\n";
-        out += "half_vector = normalize(view) + light_vector;\n";
+        out += "half_vector = normalized_view + light_vector;\n";
 
         // Compute dot product of light_vector and normal, adjust if lighting is one-sided or
         // two-sided
@@ -814,25 +814,29 @@ static void WriteLighting(std::string& out, const PicaFSConfig& config) {
         }
 
         // If enabled, compute spot light attenuation value
-        std::string spot_atten = "1.0";
+        std::string spot_atten;
         if (light_config.spot_atten_enable &&
             LightingRegs::IsLightingSamplerSupported(
                 lighting.config, LightingRegs::LightingSampler::SpotlightAttenuation)) {
             std::string value =
                 GetLutValue(LightingRegs::SpotlightAttenuationSampler(light_config.num),
                             light_config.num, lighting.lut_sp.type, lighting.lut_sp.abs_input);
-            spot_atten = "(" + std::to_string(lighting.lut_sp.scale) + " * " + value + ")";
+            if (lighting.lut_sp.scale != 1)
+                value = "(" + std::to_string(lighting.lut_sp.scale) + " * " + value + ")";
+            out += "spot_atten = " + value + ";\n";
+            spot_atten = "spot_atten * ";
         }
 
         // If enabled, compute distance attenuation value
-        std::string dist_atten = "1.0";
+        std::string dist_atten;
         if (light_config.dist_atten_enable) {
             std::string index = "clamp(" + light_src + ".dist_atten_scale * length(-view - " +
                                 light_src + ".position) + " + light_src +
                                 ".dist_atten_bias, 0.0, 1.0)";
             auto sampler = LightingRegs::DistanceAttenuationSampler(light_config.num);
-            dist_atten = "LookupLightingLUTUnsigned(" +
-                         std::to_string(static_cast<unsigned>(sampler)) + "," + index + ")";
+            out += "dist_atten = LookupLightingLUTUnsigned(" +
+                         std::to_string(static_cast<unsigned>(sampler)) + "," + index + ");\n";
+            dist_atten = "dist_atten * ";
         }
 
         if (light_config.geometric_factor_0 || light_config.geometric_factor_1) {
@@ -842,7 +846,7 @@ static void WriteLighting(std::string& out, const PicaFSConfig& config) {
         }
 
         // Specular 0 component
-        std::string d0_lut_value = "1.0";
+        std::string d0_lut_value;
         if (lighting.lut_d0.enable &&
             LightingRegs::IsLightingSamplerSupported(
                 lighting.config, LightingRegs::LightingSampler::Distribution0)) {
@@ -850,9 +854,11 @@ static void WriteLighting(std::string& out, const PicaFSConfig& config) {
             std::string value =
                 GetLutValue(LightingRegs::LightingSampler::Distribution0, light_config.num,
                             lighting.lut_d0.type, lighting.lut_d0.abs_input);
-            d0_lut_value = "(" + std::to_string(lighting.lut_d0.scale) + " * " + value + ")";
+            if (lighting.lut_d0.scale != 1)
+                value = "(" + std::to_string(lighting.lut_d0.scale) + " * " + value + ")";
+            d0_lut_value += value  + " * ";
         }
-        std::string specular_0 = "(" + d0_lut_value + " * " + light_src + ".specular_0)";
+        std::string specular_0 = "(" + d0_lut_value + light_src + ".specular_0)";
         if (light_config.geometric_factor_0) {
             specular_0 = "(" + specular_0 + " * geo_factor)";
         }
@@ -864,10 +870,11 @@ static void WriteLighting(std::string& out, const PicaFSConfig& config) {
             std::string value =
                 GetLutValue(LightingRegs::LightingSampler::ReflectRed, light_config.num,
                             lighting.lut_rr.type, lighting.lut_rr.abs_input);
-            value = "(" + std::to_string(lighting.lut_rr.scale) + " * " + value + ")";
-            out += "refl_value.r = " + value + ";\n";
+            if (lighting.lut_rr.scale != 1)
+                value = "(" + std::to_string(lighting.lut_rr.scale) + " * " + value + ")";
+            out += "refl_value = vec3(" + value + ");\n";
         } else {
-            out += "refl_value.r = 1.0;\n";
+            out += "refl_value = vec3(1.0);\n";
         }
 
         // If enabled, lookup ReflectGreen value, otherwise, ReflectRed value is used
@@ -877,10 +884,9 @@ static void WriteLighting(std::string& out, const PicaFSConfig& config) {
             std::string value =
                 GetLutValue(LightingRegs::LightingSampler::ReflectGreen, light_config.num,
                             lighting.lut_rg.type, lighting.lut_rg.abs_input);
-            value = "(" + std::to_string(lighting.lut_rg.scale) + " * " + value + ")";
+            if (lighting.lut_rg.scale != 1)
+                value = "(" + std::to_string(lighting.lut_rg.scale) + " * " + value + ")";
             out += "refl_value.g = " + value + ";\n";
-        } else {
-            out += "refl_value.g = refl_value.r;\n";
         }
 
         // If enabled, lookup ReflectBlue value, otherwise, ReflectRed value is used
@@ -890,10 +896,9 @@ static void WriteLighting(std::string& out, const PicaFSConfig& config) {
             std::string value =
                 GetLutValue(LightingRegs::LightingSampler::ReflectBlue, light_config.num,
                             lighting.lut_rb.type, lighting.lut_rb.abs_input);
-            value = "(" + std::to_string(lighting.lut_rb.scale) + " * " + value + ")";
+            if (lighting.lut_rb.scale != 1)
+                value = "(" + std::to_string(lighting.lut_rb.scale) + " * " + value + ")";
             out += "refl_value.b = " + value + ";\n";
-        } else {
-            out += "refl_value.b = refl_value.r;\n";
         }
 
         // Specular 1 component
@@ -905,7 +910,8 @@ static void WriteLighting(std::string& out, const PicaFSConfig& config) {
             std::string value =
                 GetLutValue(LightingRegs::LightingSampler::Distribution1, light_config.num,
                             lighting.lut_d1.type, lighting.lut_d1.abs_input);
-            d1_lut_value = "(" + std::to_string(lighting.lut_d1.scale) + " * " + value + ")";
+            if (lighting.lut_d1.scale != 1)
+                d1_lut_value = "(" + std::to_string(lighting.lut_d1.scale) + " * " + value + ")";
         }
         std::string specular_1 =
             "(" + d1_lut_value + " * refl_value * " + light_src + ".specular_1)";
@@ -922,15 +928,16 @@ static void WriteLighting(std::string& out, const PicaFSConfig& config) {
             std::string value =
                 GetLutValue(LightingRegs::LightingSampler::Fresnel, light_config.num,
                             lighting.lut_fr.type, lighting.lut_fr.abs_input);
-            value = "(" + std::to_string(lighting.lut_fr.scale) + " * " + value + ")";
+            if (lighting.lut_fr.scale != 1)
+                value = "(" + std::to_string(lighting.lut_fr.scale) + " * " + value + ")";
 
             // Enabled for diffuse lighting alpha component
             if (lighting.enable_primary_alpha) {
                 out += "diffuse_sum.a = " + value + ";\n";
-            }
-
-            // Enabled for the specular lighting alpha component
-            if (lighting.enable_secondary_alpha) {
+                if (lighting.enable_secondary_alpha) {
+                    out += "specular_sum.a = diffuse_sum.a;\n";
+                }
+            } else if (lighting.enable_secondary_alpha) {
                 out += "specular_sum.a = " + value + ";\n";
             }
         }
@@ -941,13 +948,12 @@ static void WriteLighting(std::string& out, const PicaFSConfig& config) {
         std::string shadow_secondary = shadow_secondary_enable ? " * shadow.rgb" : "";
 
         // Compute primary fragment color (diffuse lighting) function
-        out += "diffuse_sum.rgb += ((" + light_src + ".diffuse * dot_product) + " + light_src +
-               ".ambient) * " + dist_atten + " * " + spot_atten + shadow_primary + ";\n";
+        out += "diffuse_sum.rgb += " + dist_atten + spot_atten + "((" + light_src +
+               ".diffuse * dot_product) + " + light_src + ".ambient)" + shadow_primary + ";\n";
 
         // Compute secondary fragment color (specular lighting) function
-        out += "specular_sum.rgb += (" + specular_0 + " + " + specular_1 +
-               ") * clamp_highlights * " + dist_atten + " * " + spot_atten + shadow_secondary +
-               ";\n";
+        out += "specular_sum.rgb += " + dist_atten + spot_atten + "(" + specular_0 + " + " +
+               specular_1 + ") * clamp_highlights" + shadow_secondary + ";\n";
     }
 
     // Apply shadow attenuation to alpha components if enabled
@@ -1231,10 +1237,11 @@ float ProcTexNoiseCoef(vec2 x) {
     }
 }
 
-std::string GenerateFragmentShader(const PicaFSConfig& config, bool separable_shader) {
+void GenerateFragmentShader(const PicaFSConfig& config, bool separable_shader, std::string& out,
+                            u32& uniform_flag) {
     const auto& state = config.state;
 
-    std::string out = R"(
+    out = R"(
 #extension GL_ARB_shader_image_load_store : enable
 #extension GL_ARB_shader_image_size : enable
 #define ALLOW_SHADOW (defined(GL_ARB_shader_image_load_store) && defined(GL_ARB_shader_image_size))
@@ -1248,7 +1255,7 @@ std::string GenerateFragmentShader(const PicaFSConfig& config, bool separable_sh
         out += fragment_shader_precision_OES;
     }
 
-    out += GetVertexInterfaceDeclaration(false, separable_shader);
+    GetVertexInterfaceDeclaration(false, separable_shader, out);
 
     out += R"(
 #ifndef CITRA_GLES
@@ -1276,6 +1283,7 @@ layout(r32ui) uniform uimage2D shadow_buffer;
 )";
 
     out += UniformBlockDef;
+    uniform_flag |= UNIFORM_FLAG_SHADER_DATA;
 
     out += R"(
 // Rotate the vector v by the quaternion q
@@ -1357,8 +1365,8 @@ vec4 shadowTexture(vec2 uv, float w) {
     if (!config.state.shadow_texture_orthographic) {
         out += "uv /= w;";
     }
-    out += "uint z = uint(max(0, int(min(abs(w), 1.0) * float(0xFFFFFF)) - shadow_texture_bias));";
     out += R"(
+    uint z = uint(max(0, int(min(abs(w), 1.0) * float(0xFFFFFF)) - shadow_texture_bias));
     vec2 coord = vec2(imageSize(shadow_texture_px)) * uv - vec2(0.5);
     vec2 coord_floor = floor(coord);
     vec2 f = coord - coord_floor;
@@ -1369,9 +1377,10 @@ vec4 shadowTexture(vec2 uv, float w) {
         SampleShadow2D(i + ivec2(0, 1), z),
         SampleShadow2D(i + ivec2(1, 1), z));
     return vec4(mix2(s, f));
-}
-
-vec4 shadowTextureCube(vec2 uv, float w) {
+})";
+    if (TexturingRegs::TextureConfig::ShadowCube == config.state.lighting.shadow_selector)
+        out += R"(
+    vec4 shadowTextureCube(vec2 uv, float w) {
     ivec2 size = imageSize(shadow_texture_px);
     vec3 c = vec3(uv, w);
     vec3 a = abs(c);
@@ -1388,9 +1397,7 @@ vec4 shadowTextureCube(vec2 uv, float w) {
         uv = -c.xy;
         if (c.z > 0.0) uv.x = -uv.x;
     }
-)";
-    out += "uint z = uint(max(0, int(min(w, 1.0) * float(0xFFFFFF)) - shadow_texture_bias));";
-    out += R"(
+    uint z = uint(max(0, int(min(w, 1.0) * float(0xFFFFFF)) - shadow_texture_bias));
     vec2 coord = vec2(size) * (uv / w * vec2(0.5) + vec2(0.5)) - vec2(0.5);
     vec2 coord_floor = floor(coord);
     vec2 f = coord - coord_floor;
@@ -1452,8 +1459,8 @@ vec4 shadowTextureCube(vec2 uv, float w) {
         CompareShadow(pixels.z, z),
         CompareShadow(pixels.w, z));
     return vec4(mix2(s, f));
-}
-
+})";
+    out += R"(
 #else
 
 vec4 shadowTexture(vec2 uv, float w) {
@@ -1482,7 +1489,7 @@ vec4 secondary_fragment_color = vec4(0.0);
     // Do not do any sort of processing if it's obvious we're not going to pass the alpha test
     if (state.alpha_test_func == FramebufferRegs::CompareFunc::Never) {
         out += "discard; }";
-        return out;
+        return;
     }
 
     // Append the scissor test
@@ -1546,7 +1553,7 @@ vec4 secondary_fragment_color = vec4(0.0);
                                                                 "VideoCore_Pica_UseGasMode", true);
         LOG_CRITICAL(Render_OpenGL, "Unimplemented gas mode");
         out += "discard; }";
-        return out;
+        return;
     }
 
     if (state.shadow_rendering) {
@@ -1583,12 +1590,10 @@ do {
     }
 
     out += "}";
-
-    return out;
 }
 
-std::string GenerateTrivialVertexShader(bool separable_shader) {
-    std::string out = "";
+void GenerateTrivialVertexShader(bool separable_shader, std::string& out, u32& uniform_flag) {
+    out = "";
     if (separable_shader) {
         out += "#extension GL_ARB_separate_shader_objects : enable\n";
     }
@@ -1608,9 +1613,10 @@ std::string GenerateTrivialVertexShader(bool separable_shader) {
            ") in vec4 vert_normquat;\n";
     out += "layout(location = " + std::to_string((int)ATTRIBUTE_VIEW) + ") in vec3 vert_view;\n";
 
-    out += GetVertexInterfaceDeclaration(true, separable_shader);
+    GetVertexInterfaceDeclaration(true, separable_shader, out);
 
     out += UniformBlockDef;
+    uniform_flag |= UNIFORM_FLAG_SHADER_DATA;
 
     out += R"(
 
@@ -1629,13 +1635,11 @@ void main() {
 #endif // !defined(CITRA_GLES) || defined(GL_EXT_clip_cull_distance)
 }
 )";
-
-    return out;
 }
 
-std::optional<std::string> GenerateVertexShader(const Pica::Shader::ShaderSetup& setup,
-                                                const PicaVSConfig& config, bool separable_shader) {
-    std::string out = "";
+bool GenerateVertexShader(const Pica::Shader::ShaderSetup& setup, const PicaVSConfig& config,
+                          bool separable_shader, std::string& out, u32& uniform_flag) {
+    out = "";
     if (separable_shader) {
         out += "#extension GL_ARB_separate_shader_objects : enable\n";
     }
@@ -1662,7 +1666,7 @@ std::optional<std::string> GenerateVertexShader(const Pica::Shader::ShaderSetup&
         get_output_reg, config.state.sanitize_mul);
 
     if (!program_source_opt)
-        return {};
+        return false;
 
     std::string& program_source = *program_source_opt;
 
@@ -1673,6 +1677,7 @@ layout (std140) uniform vs_config {
 };
 
 )";
+    uniform_flag |= UNIFORM_FLAG_VS_CONFIG;
     // input attributes declaration
     for (std::size_t i = 0; i < used_regs.size(); ++i) {
         if (used_regs[i]) {
@@ -1696,12 +1701,14 @@ layout (std140) uniform vs_config {
 
     out += program_source;
 
-    return out;
+    return true;
 }
 
-static std::string GetGSCommonSource(const PicaGSConfigCommonRaw& config, bool separable_shader) {
-    std::string out = GetVertexInterfaceDeclaration(true, separable_shader);
+static void GetGSCommonSource(const PicaGSConfigCommonRaw& config, bool separable_shader,
+                              std::string& out, u32& uniform_flag) {
+    GetVertexInterfaceDeclaration(true, separable_shader, out);
     out += UniformBlockDef;
+    uniform_flag |= UNIFORM_FLAG_SHADER_DATA;
     out += ShaderDecompiler::GetCommonDeclarations();
 
     out += '\n';
@@ -1781,11 +1788,11 @@ void EmitPrim(Vertex vtx0, Vertex vtx1, Vertex vtx2) {
 }
 )";
 
-    return out;
 };
 
-std::string GenerateFixedGeometryShader(const PicaFixedGSConfig& config, bool separable_shader) {
-    std::string out = "";
+void GenerateFixedGeometryShader(const PicaFixedGSConfig& config, bool separable_shader,
+                                 std::string& out, u32& uniform_flag) {
+    out = "";
     if (separable_shader) {
         out += "#extension GL_ARB_separate_shader_objects : enable\n\n";
     }
@@ -1796,7 +1803,7 @@ layout(triangle_strip, max_vertices = 3) out;
 
 )";
 
-    out += GetGSCommonSource(config.state, separable_shader);
+    GetGSCommonSource(config.state, separable_shader, out, uniform_flag);
 
     out += R"(
 void main() {
@@ -1813,7 +1820,5 @@ void main() {
     }
     out += "    EmitPrim(prim_buffer[0], prim_buffer[1], prim_buffer[2]);\n";
     out += "}\n";
-
-    return out;
 }
 } // namespace OpenGL

@@ -17,8 +17,11 @@
 #include "core/memory.h"
 #include "video_core/renderer_base.h"
 #include "video_core/video_core.h"
+#include "video_core/renderer_opengl/gl_rasterizer.h"
 
 namespace Memory {
+PAddr VirtualAddressToPhysicalForRasterizer(VAddr addr);
+std::vector<VAddr> PhysicalToVirtualAddressForRasterizer(PAddr addr);
 
 class RasterizerCacheMarker {
 public:
@@ -40,10 +43,10 @@ private:
         if (addr >= VRAM_VADDR && addr < VRAM_VADDR_END) {
             return &vram[(addr - VRAM_VADDR) / PAGE_SIZE];
         }
-        if (addr >= LINEAR_HEAP_VADDR && addr < LINEAR_HEAP_VADDR_END) {
+        else if (addr >= LINEAR_HEAP_VADDR && addr < LINEAR_HEAP_VADDR_END) {
             return &linear_heap[(addr - LINEAR_HEAP_VADDR) / PAGE_SIZE];
         }
-        if (addr >= NEW_LINEAR_HEAP_VADDR && addr < NEW_LINEAR_HEAP_VADDR_END) {
+        else if (addr >= NEW_LINEAR_HEAP_VADDR && addr < NEW_LINEAR_HEAP_VADDR_END) {
             return &new_linear_heap[(addr - NEW_LINEAR_HEAP_VADDR) / PAGE_SIZE];
         }
         return nullptr;
@@ -87,23 +90,23 @@ void MemorySystem::MapPages(PageTable& page_table, u32 base, u32 size, u8* memor
     RasterizerFlushVirtualRegion(base << PAGE_BITS, size * PAGE_SIZE,
                                  FlushMode::FlushAndInvalidate);
 
-    u32 end = base + size;
-    while (base != end) {
-        ASSERT_MSG(base < PAGE_TABLE_NUM_ENTRIES, "out of range mapping at {:08X}", base);
+u32 end = base + size;
+while (base != end) {
+    ASSERT_MSG(base < PAGE_TABLE_NUM_ENTRIES, "out of range mapping at {:08X}", base);
 
-        page_table.attributes[base] = type;
-        page_table.pointers[base] = memory;
+    page_table.attributes[base] = type;
+    page_table.pointers[base] = memory;
 
-        // If the memory to map is already rasterizer-cached, mark the page
-        if (type == PageType::Memory && impl->cache_marker.IsCached(base * PAGE_SIZE)) {
-            page_table.attributes[base] = PageType::RasterizerCachedMemory;
-            page_table.pointers[base] = nullptr;
-        }
-
-        base += 1;
-        if (memory != nullptr)
-            memory += PAGE_SIZE;
+    // If the memory to map is already rasterizer-cached, mark the page
+    if (type == PageType::Memory && impl->cache_marker.IsCached(base * PAGE_SIZE)) {
+        page_table.attributes[base] = PageType::RasterizerCachedMemory;
+        page_table.pointers[base] = nullptr;
     }
+
+    base += 1;
+    if (memory != nullptr)
+        memory += PAGE_SIZE;
+}
 }
 
 void MemorySystem::MapMemoryRegion(PageTable& page_table, VAddr base, u32 size, u8* target) {
@@ -113,12 +116,12 @@ void MemorySystem::MapMemoryRegion(PageTable& page_table, VAddr base, u32 size, 
 }
 
 void MemorySystem::MapIoRegion(PageTable& page_table, VAddr base, u32 size,
-                               MMIORegionPointer mmio_handler) {
+    MMIORegionPointer mmio_handler) {
     ASSERT_MSG((size & PAGE_MASK) == 0, "non-page aligned size: {:08X}", size);
     ASSERT_MSG((base & PAGE_MASK) == 0, "non-page aligned base: {:08X}", base);
     MapPages(page_table, base / PAGE_SIZE, size / PAGE_SIZE, nullptr, PageType::Special);
 
-    page_table.special_regions.emplace_back(SpecialRegion{base, size, mmio_handler});
+    page_table.special_regions.emplace_back(SpecialRegion{ base, size, mmio_handler });
 }
 
 void MemorySystem::UnmapRegion(PageTable& page_table, VAddr base, u32 size) {
@@ -131,10 +134,10 @@ u8* MemorySystem::GetPointerForRasterizerCache(VAddr addr) {
     if (addr >= LINEAR_HEAP_VADDR && addr < LINEAR_HEAP_VADDR_END) {
         return impl->fcram.get() + (addr - LINEAR_HEAP_VADDR);
     }
-    if (addr >= NEW_LINEAR_HEAP_VADDR && addr < NEW_LINEAR_HEAP_VADDR_END) {
+    else if (addr >= NEW_LINEAR_HEAP_VADDR && addr < NEW_LINEAR_HEAP_VADDR_END) {
         return impl->fcram.get() + (addr - NEW_LINEAR_HEAP_VADDR);
     }
-    if (addr >= VRAM_VADDR && addr < VRAM_VADDR_END) {
+    else if (addr >= VRAM_VADDR && addr < VRAM_VADDR_END) {
         return impl->vram.get() + (addr - VRAM_VADDR);
     }
     UNREACHABLE();
@@ -184,11 +187,11 @@ T MemorySystem::Read(const VAddr vaddr) {
         ASSERT_MSG(false, "Mapped memory page without a pointer @ {:08X}", vaddr);
         break;
     case PageType::RasterizerCachedMemory: {
-        RasterizerFlushVirtualRegion(vaddr, sizeof(T), FlushMode::Flush);
-
-        T value;
-        std::memcpy(&value, GetPointerForRasterizerCache(vaddr), sizeof(T));
-        return value;
+        auto* rasterizer = VideoCore::g_renderer->Rasterizer();
+        PAddr paddr = VirtualAddressToPhysicalForRasterizer(vaddr);
+        if (rasterizer->IsInDirtyCache<sizeof(T)>(paddr) >= 0)
+            RasterizerFlushVirtualRegion(vaddr, sizeof(T), FlushMode::Flush);
+        return *(T*)GetPointerForRasterizerCache(vaddr);
     }
     case PageType::Special:
         return ReadMMIO<T>(GetMMIOHandler(*impl->current_page_table, vaddr), vaddr);
@@ -219,8 +222,11 @@ void MemorySystem::Write(const VAddr vaddr, const T data) {
         ASSERT_MSG(false, "Mapped memory page without a pointer @ {:08X}", vaddr);
         break;
     case PageType::RasterizerCachedMemory: {
-        RasterizerFlushVirtualRegion(vaddr, sizeof(T), FlushMode::Invalidate);
-        std::memcpy(GetPointerForRasterizerCache(vaddr), &data, sizeof(T));
+        auto* rasterizer = VideoCore::g_renderer->Rasterizer();
+        PAddr paddr = VirtualAddressToPhysicalForRasterizer(vaddr);
+        if (rasterizer->IsInSurfaceCache<sizeof(T)>(paddr) >= 0)
+            RasterizerFlushVirtualRegion(vaddr, sizeof(T), FlushMode::Invalidate);
+        *(T*)GetPointerForRasterizerCache(vaddr) = data;
         break;
     }
     case PageType::Special:
@@ -285,24 +291,24 @@ std::string MemorySystem::ReadCString(VAddr vaddr, std::size_t max_length) {
     return string;
 }
 
+struct MemoryArea {
+    PAddr paddr_base;
+    PAddr paddr_end;
+};
+
+static const MemoryArea memory_areas[] = {
+    {VRAM_PADDR, VRAM_PADDR + VRAM_SIZE},
+    {DSP_RAM_PADDR, DSP_RAM_PADDR + DSP_RAM_SIZE},
+    {FCRAM_PADDR, FCRAM_PADDR + FCRAM_N3DS_SIZE},
+    {N3DS_EXTRA_RAM_PADDR, N3DS_EXTRA_RAM_PADDR + N3DS_EXTRA_RAM_SIZE},
+};
+
 u8* MemorySystem::GetPhysicalPointer(PAddr address) {
-    struct MemoryArea {
-        PAddr paddr_base;
-        u32 size;
-    };
-
-    static constexpr MemoryArea memory_areas[] = {
-        {VRAM_PADDR, VRAM_SIZE},
-        {DSP_RAM_PADDR, DSP_RAM_SIZE},
-        {FCRAM_PADDR, FCRAM_N3DS_SIZE},
-        {N3DS_EXTRA_RAM_PADDR, N3DS_EXTRA_RAM_SIZE},
-    };
-
     const auto area =
         std::find_if(std::begin(memory_areas), std::end(memory_areas), [&](const auto& area) {
             // Note: the region end check is inclusive because the user can pass in an address that
             // represents an open right bound
-            return address >= area.paddr_base && address <= area.paddr_base + area.size;
+            return address >= area.paddr_base && address <= area.paddr_end;
         });
 
     if (area == std::end(memory_areas)) {
@@ -312,7 +318,7 @@ u8* MemorySystem::GetPhysicalPointer(PAddr address) {
 
     u32 offset_into_region = address - area->paddr_base;
 
-    u8* target_pointer = nullptr;
+    u8* target_pointer;
     switch (area->paddr_base) {
     case VRAM_PADDR:
         target_pointer = impl->vram.get() + offset_into_region;
@@ -327,10 +333,22 @@ u8* MemorySystem::GetPhysicalPointer(PAddr address) {
         target_pointer = impl->n3ds_extra_ram.get() + offset_into_region;
         break;
     default:
+        target_pointer = nullptr;
         UNREACHABLE();
     }
 
     return target_pointer;
+}
+/// For a rasterizer-accessible PAddr, gets a list of all possible VAddr
+static PAddr VirtualAddressToPhysicalForRasterizer(VAddr addr) {
+    if (addr >= LINEAR_HEAP_VADDR && addr < LINEAR_HEAP_VADDR_END) {
+        return FCRAM_PADDR + (addr - LINEAR_HEAP_VADDR);
+    } else if (addr >= NEW_LINEAR_HEAP_VADDR && addr < NEW_LINEAR_HEAP_VADDR_END) {
+        return FCRAM_PADDR + (addr - NEW_LINEAR_HEAP_VADDR);
+    } else if (addr >= VRAM_VADDR && addr < VRAM_VADDR_END) {
+        return VRAM_PADDR + (addr - VRAM_VADDR);
+    }
+    UNREACHABLE();
 }
 
 /// For a rasterizer-accessible PAddr, gets a list of all possible VAddr
@@ -338,10 +356,10 @@ static std::vector<VAddr> PhysicalToVirtualAddressForRasterizer(PAddr addr) {
     if (addr >= VRAM_PADDR && addr < VRAM_PADDR_END) {
         return {addr - VRAM_PADDR + VRAM_VADDR};
     }
-    if (addr >= FCRAM_PADDR && addr < FCRAM_PADDR_END) {
+    else if (addr >= FCRAM_PADDR && addr < FCRAM_PADDR_END) {
         return {addr - FCRAM_PADDR + LINEAR_HEAP_VADDR, addr - FCRAM_PADDR + NEW_LINEAR_HEAP_VADDR};
     }
-    if (addr >= FCRAM_PADDR_END && addr < FCRAM_N3DS_PADDR_END) {
+    else if (addr >= FCRAM_PADDR_END && addr < FCRAM_N3DS_PADDR_END) {
         return {addr - FCRAM_PADDR + NEW_LINEAR_HEAP_VADDR};
     }
     // While the physical <-> virtual mapping is 1:1 for the regions supported by the cache,

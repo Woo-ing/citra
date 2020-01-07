@@ -100,7 +100,7 @@ public:
         }
     }
 
-    void Create(const char* source, GLenum type) {
+    void Create(const char* source, u32 uniform_flag, GLenum type) {
         if (shader_or_program.which() == 0) {
             boost::get<OGLShader>(shader_or_program).Create(source, type);
         } else {
@@ -108,7 +108,15 @@ public:
             shader.Create(source, type);
             OGLProgram& program = boost::get<OGLProgram>(shader_or_program);
             program.Create(true, {shader.handle});
-            SetShaderUniformBlockBindings(program.handle);
+
+            if ((uniform_flag & UNIFORM_FLAG_SHADER_DATA) != 0)
+                SetShaderUniformBlockBinding(program.handle, "shader_data", UniformBindings::Common,
+                                             sizeof(UniformData));
+            if ((uniform_flag & UNIFORM_FLAG_VS_CONFIG) != 0)
+                SetShaderUniformBlockBinding(program.handle, "vs_config", UniformBindings::VS,
+                                             sizeof(VSUniformData));
+
+            // SetShaderUniformBlockBindings(program.handle);
             SetShaderSamplerBindings(program.handle);
         }
     }
@@ -121,14 +129,41 @@ public:
         }
     }
 
+    void GetBin(std::vector<GLubyte>& bin) {
+        if (shader_or_program.which() == 0) {
+        } else {
+            OGLProgram& program = boost::get<OGLProgram>(shader_or_program);
+            program.GetBin(bin);
+        }
+    }
+
+    void SetBin(const std::vector<GLubyte>& bin) {
+
+        if (shader_or_program.which() == 0) {
+        } else {
+            OGLProgram& program = boost::get<OGLProgram>(shader_or_program);
+            program.Create(bin);
+
+            SetShaderUniformBlockBinding(program.handle, "shader_data", UniformBindings::Common,
+                                         sizeof(UniformData));
+            SetShaderUniformBlockBinding(program.handle, "vs_config", UniformBindings::VS,
+                                         sizeof(VSUniformData));
+
+            // SetShaderUniformBlockBindings(program.handle);
+            SetShaderSamplerBindings(program.handle);
+        }
+    }
+
 private:
     boost::variant<OGLShader, OGLProgram> shader_or_program;
 };
 
 class TrivialVertexShader {
 public:
-    explicit TrivialVertexShader(bool separable) : program(separable) {
-        program.Create(GenerateTrivialVertexShader(separable).c_str(), GL_VERTEX_SHADER);
+    explicit TrivialVertexShader(bool separable, u32& uniform_flag) : program(separable) {
+        std::string source;
+        GenerateTrivialVertexShader(separable, source, uniform_flag);
+        program.Create(source.c_str(), uniform_flag, GL_VERTEX_SHADER);
     }
     GLuint Get() const {
         return program.GetHandle();
@@ -138,23 +173,72 @@ private:
     OGLShaderStage program;
 };
 
-template <typename KeyConfigType, std::string (*CodeGenerator)(const KeyConfigType&, bool),
-          GLenum ShaderType>
+template <typename KeyConfigType,
+          void (*CodeGenerator)(const KeyConfigType&, bool, std::string&, u32&), GLenum ShaderType>
 class ShaderCache {
 public:
     explicit ShaderCache(bool separable) : separable(separable) {}
-    GLuint Get(const KeyConfigType& config) {
+    ~ShaderCache() {
+        SaveShaderBin();
+    }
+    GLuint Get(const KeyConfigType& config, u32& uniform_flag) {
+        u64 hash = config.Hash();
         auto [iter, new_shader] = shaders.emplace(config, OGLShaderStage{separable});
         OGLShaderStage& cached_shader = iter->second;
         if (new_shader) {
-            cached_shader.Create(CodeGenerator(config, separable).c_str(), ShaderType);
+            auto [iter_bin, new_shader_bin] = shader_bins.emplace(hash, std::vector<GLubyte>{});
+            std::vector<GLubyte>& shader_bin = iter_bin->second;
+            if (new_shader_bin) {
+                std::string source;
+                CodeGenerator(config, separable, source, uniform_flag);
+                cached_shader.Create(source.c_str(), uniform_flag, ShaderType);
+                cached_shader.GetBin(shader_bin);
+            } else {
+                cached_shader.SetBin(shader_bin);
+            }
         }
         return cached_shader.GetHandle();
+    }
+
+    void SaveShaderBin() {
+        FILE* bin_file = fopen(bin_file_name.c_str(), "wb");
+        if (bin_file != NULL) {
+            std::map<u64, std::vector<GLubyte>>::iterator iter = shader_bins.begin();
+            for (; iter != shader_bins.end(); ++iter) {
+                fwrite(&iter->first, sizeof(u64), 1, bin_file);
+                std::vector<GLubyte>& bin = iter->second;
+                u32 size = (u32)bin.size();
+                fwrite(&size, sizeof(u32), 1, bin_file);
+                fwrite(bin.data(), 1, size, bin_file);
+            }
+            fclose(bin_file);
+        }
+    }
+
+    void LoadShaderBin(const char* file_name) {
+        bin_file_name = file_name;
+        FILE* bin_file = fopen(file_name, "rb");
+        if (bin_file != NULL) {
+            for (; !feof(bin_file);) {
+                u64 hash = 0;
+                if (fread(&hash, sizeof(u64), 1, bin_file) == 1) {
+                    u32 size = 0;
+                    fread(&size, sizeof(u32), 1, bin_file);
+
+                    std::vector<GLubyte>& bin = shader_bins[hash];
+                    bin.resize(size);
+                    fread(bin.data(), 1, size, bin_file);
+                }
+            }
+            fclose(bin_file);
+        }
     }
 
 private:
     bool separable;
     std::unordered_map<KeyConfigType, OGLShaderStage> shaders;
+    std::map<u64, std::vector<GLubyte>> shader_bins;
+    std::string bin_file_name;
 };
 
 // This is a cache designed for shaders translated from PICA shaders. The first cache matches the
@@ -163,26 +247,27 @@ private:
 // program buffer from the previous shader, which is hashed into the config, resulting several
 // different config values from the same shader program.
 template <typename KeyConfigType,
-          std::optional<std::string> (*CodeGenerator)(const Pica::Shader::ShaderSetup&,
-                                                      const KeyConfigType&, bool),
+          bool (*CodeGenerator)(const Pica::Shader::ShaderSetup&, const KeyConfigType&, bool,
+                                std::string&, u32&),
           GLenum ShaderType>
 class ShaderDoubleCache {
 public:
     explicit ShaderDoubleCache(bool separable) : separable(separable) {}
-    GLuint Get(const KeyConfigType& key, const Pica::Shader::ShaderSetup& setup) {
+    GLuint Get(const KeyConfigType& key, const Pica::Shader::ShaderSetup& setup,
+               u32& uniform_flag) {
         auto map_it = shader_map.find(key);
         if (map_it == shader_map.end()) {
-            auto program_opt = CodeGenerator(setup, key, separable);
-            if (!program_opt) {
+            std::string program;
+            bool ret = CodeGenerator(setup, key, separable, program, uniform_flag);
+            if (!ret) {
                 shader_map[key] = nullptr;
                 return 0;
             }
 
-            std::string& program = *program_opt;
             auto [iter, new_shader] = shader_cache.emplace(program, OGLShaderStage{separable});
             OGLShaderStage& cached_shader = iter->second;
             if (new_shader) {
-                cached_shader.Create(program.c_str(), ShaderType);
+                cached_shader.Create(program.c_str(), uniform_flag, ShaderType);
             }
             shader_map[key] = &cached_shader;
             return cached_shader.GetHandle();
@@ -212,11 +297,13 @@ using FragmentShaders = ShaderCache<PicaFSConfig, &GenerateFragmentShader, GL_FR
 class ShaderProgramManager::Impl {
 public:
     explicit Impl(bool separable, bool is_amd)
-        : is_amd(is_amd), separable(separable), programmable_vertex_shaders(separable),
-          trivial_vertex_shader(separable), fixed_geometry_shaders(separable),
-          fragment_shaders(separable) {
+        : is_amd(is_amd), separable(separable), uniform_flag(0),
+          programmable_vertex_shaders(separable), trivial_vertex_shader(separable, uniform_flag),
+          fixed_geometry_shaders(separable), fragment_shaders(separable) {
         if (separable)
             pipeline.Create();
+        fixed_geometry_shaders.LoadShaderBin("gs.bin");
+        fragment_shaders.LoadShaderBin("fs.bin");
     }
 
     struct ShaderTuple {
@@ -255,6 +342,7 @@ public:
     FragmentShaders fragment_shaders;
 
     bool separable;
+    u32 uniform_flag;
     std::unordered_map<ShaderTuple, OGLProgram, ShaderTuple::Hash> program_cache;
     OGLPipeline pipeline;
 };
@@ -265,8 +353,8 @@ ShaderProgramManager::ShaderProgramManager(bool separable, bool is_amd)
 ShaderProgramManager::~ShaderProgramManager() = default;
 
 bool ShaderProgramManager::UseProgrammableVertexShader(const PicaVSConfig& config,
-                                                       const Pica::Shader::ShaderSetup setup) {
-    GLuint handle = impl->programmable_vertex_shaders.Get(config, setup);
+                                                       const Pica::Shader::ShaderSetup& setup) {
+    GLuint handle = impl->programmable_vertex_shaders.Get(config, setup, impl->uniform_flag);
     if (handle == 0)
         return false;
     impl->current.vs = handle;
@@ -278,7 +366,7 @@ void ShaderProgramManager::UseTrivialVertexShader() {
 }
 
 void ShaderProgramManager::UseFixedGeometryShader(const PicaFixedGSConfig& config) {
-    impl->current.gs = impl->fixed_geometry_shaders.Get(config);
+    impl->current.gs = impl->fixed_geometry_shaders.Get(config, impl->uniform_flag);
 }
 
 void ShaderProgramManager::UseTrivialGeometryShader() {
@@ -286,7 +374,7 @@ void ShaderProgramManager::UseTrivialGeometryShader() {
 }
 
 void ShaderProgramManager::UseFragmentShader(const PicaFSConfig& config) {
-    impl->current.fs = impl->fragment_shaders.Get(config);
+    impl->current.fs = impl->fragment_shaders.Get(config, impl->uniform_flag);
 }
 
 void ShaderProgramManager::ApplyTo(OpenGLState& state) {
@@ -310,7 +398,14 @@ void ShaderProgramManager::ApplyTo(OpenGLState& state) {
         OGLProgram& cached_program = impl->program_cache[impl->current];
         if (cached_program.handle == 0) {
             cached_program.Create(false, {impl->current.vs, impl->current.gs, impl->current.fs});
-            SetShaderUniformBlockBindings(cached_program.handle);
+
+            if ((impl->uniform_flag & UNIFORM_FLAG_SHADER_DATA) != 0)
+                SetShaderUniformBlockBinding(cached_program.handle, "shader_data",
+                                             UniformBindings::Common, sizeof(UniformData));
+            if ((impl->uniform_flag & UNIFORM_FLAG_VS_CONFIG) != 0)
+                SetShaderUniformBlockBinding(cached_program.handle, "vs_config",
+                                             UniformBindings::VS, sizeof(VSUniformData));
+            // SetShaderUniformBlockBindings(cached_program.handle);
             SetShaderSamplerBindings(cached_program.handle);
         }
         state.draw.shader_program = cached_program.handle;

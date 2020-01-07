@@ -23,6 +23,7 @@
 #include "video_core/renderer_base.h"
 #include "video_core/utils.h"
 #include "video_core/video_core.h"
+#include "video_core/renderer_opengl/gl_rasterizer.h"
 
 namespace GPU {
 

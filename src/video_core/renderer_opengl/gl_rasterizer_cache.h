@@ -22,6 +22,7 @@
 #include <boost/functional/hash.hpp>
 #include <glad/glad.h>
 #include "common/assert.h"
+#include "common/cache_map.h"
 #include "common/common_funcs.h"
 #include "common/common_types.h"
 #include "common/math_util.h"
@@ -79,10 +80,9 @@ namespace OpenGL {
 struct CachedSurface;
 using Surface = std::shared_ptr<CachedSurface>;
 using SurfaceSet = std::set<Surface>;
-
 using SurfaceRegions = boost::icl::interval_set<PAddr>;
-using SurfaceMap = boost::icl::interval_map<PAddr, Surface>;
-using SurfaceCache = boost::icl::interval_map<PAddr, SurfaceSet>;
+using SurfaceMap = cache_map<PAddr, Surface>;
+using SurfaceCache = cache_map<PAddr, SurfaceSet>;
 
 using SurfaceInterval = SurfaceCache::interval_type;
 static_assert(std::is_same<SurfaceRegions::interval_type, SurfaceCache::interval_type>() &&
@@ -138,8 +138,8 @@ struct SurfaceParams {
         Invalid = 5
     };
 
-    static constexpr unsigned int GetFormatBpp(PixelFormat format) {
-        constexpr std::array<unsigned int, 18> bpp_table = {
+    static constexpr u8 GetFormatBpp(PixelFormat format) {
+        constexpr std::array<u8, 18> bpp_table = {
             32, // RGBA8
             24, // RGB8
             16, // RGB5A1
@@ -482,6 +482,21 @@ public:
     /// Flush all cached resources tracked by this cache manager
     void FlushAll();
 
+    template <u32 _bytes>
+    int IsInSurfaceCache(PAddr addr) {
+        SurfaceCache::cache_range* range = surface_cache.hit<_bytes>(addr);
+        if (range == NULL)
+            return 0;
+        return (range->first == range->second) ? -1 : 1;
+    }
+    template <u32 _bytes>
+    int IsInDirtyCache(PAddr addr) {
+        SurfaceMap::cache_range* range = dirty_regions.hit<_bytes>(addr);
+        if (range == NULL)
+            return 0;
+        return (range->first == range->second) ? -1 : 1;
+    }
+
 private:
     void DuplicateSurface(const Surface& src_surface, const Surface& dest_surface);
 
@@ -504,6 +519,7 @@ private:
     PageMap cached_pages;
     SurfaceMap dirty_regions;
     SurfaceSet remove_surfaces;
+    SurfaceRegions flushed_intervals;
 
     OGLFramebuffer read_framebuffer;
     OGLFramebuffer draw_framebuffer;

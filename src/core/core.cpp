@@ -179,7 +179,8 @@ void System::PrepareReschedule() {
 }
 
 PerfStats::Results System::GetAndResetPerfStats() {
-    return perf_stats->GetAndResetStats(timing->GetGlobalTimeUs());
+    if (perf_stats != NULL)
+        return perf_stats->GetAndResetStats(timing->GetGlobalTimeUs());
 }
 
 void System::Reschedule() {
@@ -198,8 +199,8 @@ System::ResultStatus System::Init(Frontend::EmuWindow& emu_window, u32 system_mo
 
     timing = std::make_unique<Timing>();
 
-    kernel = std::make_unique<Kernel::KernelSystem>(*memory, *timing,
-                                                    [this] { PrepareReschedule(); }, system_mode);
+    kernel = std::make_unique<Kernel::KernelSystem>(
+        *memory, *timing, [this] { PrepareReschedule(); }, system_mode);
 
     if (Settings::values.use_cpu_jit) {
 #ifdef ARCHITECTURE_x86_64
@@ -331,24 +332,30 @@ void System::RegisterImageInterface(std::shared_ptr<Frontend::ImageInterface> im
 
 void System::Shutdown() {
     // Log last frame performance stats
-    const auto perf_results = GetAndResetPerfStats();
-    telemetry_session->AddField(Telemetry::FieldType::Performance, "Shutdown_EmulationSpeed",
-                                perf_results.emulation_speed * 100.0);
-    telemetry_session->AddField(Telemetry::FieldType::Performance, "Shutdown_Framerate",
-                                perf_results.game_fps);
-    telemetry_session->AddField(Telemetry::FieldType::Performance, "Shutdown_Frametime",
-                                perf_results.frametime * 1000.0);
-    telemetry_session->AddField(Telemetry::FieldType::Performance, "Mean_Frametime_MS",
+    if (perf_stats != NULL) {
+		const auto perf_results = GetAndResetPerfStats();
+		telemetry_session->AddField(Telemetry::FieldType::Performance, "Shutdown_EmulationSpeed",
+									perf_results.emulation_speed * 100.0);
+		telemetry_session->AddField(Telemetry::FieldType::Performance, "Shutdown_Framerate",
+									perf_results.game_fps);
+		telemetry_session->AddField(Telemetry::FieldType::Performance, "Shutdown_Frametime",
+									perf_results.frametime * 1000.0);
+		telemetry_session->AddField(Telemetry::FieldType::Performance, "Mean_Frametime_MS",
                                 perf_stats->GetMeanFrametime());
+    }
 
     // Shutdown emulation session
     GDBStub::Shutdown();
     VideoCore::Shutdown();
     HW::Shutdown();
     telemetry_session.reset();
-    perf_stats.reset();
+    if (perf_stats != NULL) {
+        perf_stats.reset();
+    }
     rpc_server.reset();
-    cheat_engine.reset();
+    if (cheat_engine != NULL) {
+        cheat_engine.reset();
+    }
     service_manager.reset();
     dsp_core.reset();
     cpu_core.reset();
@@ -356,7 +363,7 @@ void System::Shutdown() {
     timing.reset();
     app_loader.reset();
 
-    if (video_dumper->IsDumping()) {
+    if (video_dumper != NULL && video_dumper->IsDumping()) {
         video_dumper->StopDumping();
     }
 

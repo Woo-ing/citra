@@ -179,7 +179,7 @@ static void MortonCopyTile(u32 stride, u8* tile_buffer, u8* gl_buffer) {
         for (u32 x = 0; x < 8; ++x) {
             u8* tile_ptr = tile_buffer + VideoCore::MortonInterleave(x, y) * bytes_per_pixel;
             u8* gl_ptr = gl_buffer + ((7 - y) * stride + x) * gl_bytes_per_pixel;
-            if (morton_to_gl) {
+           if (morton_to_gl) {
                 if (format == PixelFormat::D24S8) {
                     gl_ptr[0] = tile_ptr[3];
                     std::memcpy(gl_ptr + 1, tile_ptr, 3);
@@ -211,7 +211,7 @@ static void MortonCopyTile(u32 stride, u8* tile_buffer, u8* gl_buffer) {
 
 template <bool morton_to_gl, PixelFormat format>
 static void MortonCopy(u32 stride, u32 height, u8* gl_buffer, PAddr base, PAddr start, PAddr end) {
-    constexpr u32 bytes_per_pixel = SurfaceParams::GetFormatBpp(format) / 8;
+     constexpr u32 bytes_per_pixel = SurfaceParams::GetFormatBpp(format) / 8;
     constexpr u32 tile_size = bytes_per_pixel * 64;
 
     constexpr u32 gl_bytes_per_pixel = CachedSurface::GetGLBytesPerPixel(format);
@@ -542,7 +542,7 @@ SurfaceInterval SurfaceParams::GetSubRectInterval(Common::Rectangle<u32> unscale
         unscaled_rect.top = Common::AlignUp(unscaled_rect.top, 8) / 8;
     }
 
-    const u32 stride_tiled = !is_tiled ? stride : stride * 8;
+     const u32 stride_tiled = !is_tiled ? stride : stride * 8;
 
     const u32 pixel_offset =
         stride_tiled * (!is_tiled ? unscaled_rect.bottom : (height / 8) - unscaled_rect.top) +
@@ -819,7 +819,7 @@ void CachedSurface::FlushGLBuffer(PAddr flush_start, PAddr flush_end) {
     if (dst_buffer == nullptr)
         return;
 
-    ASSERT(gl_buffer_size == width * height * GetGLBytesPerPixel(pixel_format));
+     ASSERT(gl_buffer_size == width * height * GetGLBytesPerPixel(pixel_format));
 
     // TODO: Should probably be done in ::Memory:: and check for other regions too
     // same as loadglbuffer()
@@ -934,7 +934,7 @@ void CachedSurface::DumpTexture(GLuint target_tex, u64 tex_hash) {
            desktop and ES.
         */
         GetTexImageOES(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, height, width, 0,
-                       &decoded_texture[0], decoded_texture.size());
+                       &decoded_texture[0], (GLuint)decoded_texture.size());
         glBindTexture(GL_TEXTURE_2D, 0);
         Common::FlipRGBA8Texture(decoded_texture, width, height);
         if (!image_interface->EncodePNG(dump_path, decoded_texture, width, height))
@@ -1090,7 +1090,7 @@ void CachedSurface::DownloadGLTexture(const Common::Rectangle<u32>& rect, GLuint
         if (GLES) {
             GetTexImageOES(GL_TEXTURE_2D, 0, tuple.format, tuple.type, rect.GetHeight(),
                            rect.GetWidth(), 0, &gl_buffer[buffer_offset],
-                           gl_buffer_size - buffer_offset);
+                           (GLuint)(gl_buffer_size - buffer_offset));
         } else {
             glGetTexImage(GL_TEXTURE_2D, 0, tuple.format, tuple.type, &gl_buffer[buffer_offset]);
         }
@@ -1114,9 +1114,12 @@ void CachedSurface::DownloadGLTexture(const Common::Rectangle<u32>& rect, GLuint
             glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D,
                                    texture.handle, 0);
         }
-        glReadPixels(static_cast<GLint>(rect.left), static_cast<GLint>(rect.bottom),
-                     static_cast<GLsizei>(rect.GetWidth()), static_cast<GLsizei>(rect.GetHeight()),
-                     tuple.format, tuple.type, &gl_buffer[buffer_offset]);
+
+        memset(&gl_buffer[buffer_offset], 0, gl_buffer_size - buffer_offset);
+        //glReadPixels(static_cast<GLint>(rect.left), static_cast<GLint>(rect.bottom),
+        //             static_cast<GLsizei>(rect.GetWidth()),
+        //             static_cast<GLsizei>(rect.GetHeight()), tuple.format, tuple.type,
+        //             &gl_buffer[buffer_offset]);
     }
 
     glPixelStorei(GL_PACK_ROW_LENGTH, 0);
@@ -1302,6 +1305,12 @@ void RasterizerCacheOpenGL::ConvertD24S8toABGR(GLuint src_tex,
                                                const Common::Rectangle<u32>& src_rect,
                                                GLuint dst_tex,
                                                const Common::Rectangle<u32>& dst_rect) {
+    glCopyImageSubData(src_tex, GL_TEXTURE_2D, 0, static_cast<GLint>(src_rect.left),
+                       static_cast<GLint>(src_rect.bottom), 0, dst_tex, GL_TEXTURE_2D, 0,
+                       static_cast<GLint>(dst_rect.left), static_cast<GLint>(dst_rect.bottom), 0,
+                       static_cast<GLsizei>(dst_rect.GetWidth()),
+                       static_cast<GLsizei>(dst_rect.GetHeight()), 1);
+    return;
     OpenGLState prev_state = OpenGLState::GetCurState();
     SCOPE_EXIT({ prev_state.Apply(); });
 
@@ -1318,42 +1327,57 @@ void RasterizerCacheOpenGL::ConvertD24S8toABGR(GLuint src_tex,
         glBufferData(GL_PIXEL_PACK_BUFFER, d24s8_abgr_buffer_size, nullptr, GL_STREAM_COPY);
     }
 
-    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
-    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, src_tex,
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, src_tex, 0);
+    glFramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0,
                            0);
-    glReadPixels(static_cast<GLint>(src_rect.left), static_cast<GLint>(src_rect.bottom),
-                 static_cast<GLsizei>(src_rect.GetWidth()),
-                 static_cast<GLsizei>(src_rect.GetHeight()), GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8,
-                 0);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, dst_tex, 0);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+    //glReadPixels(static_cast<GLint>(src_rect.left), static_cast<GLint>(src_rect.bottom),
+    //             static_cast<GLsizei>(src_rect.GetWidth()),
+    //             static_cast<GLsizei>(src_rect.GetHeight()), GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8,
+    //             0);
+
+    glDrawBuffer(GL_COLOR_ATTACHMENT1);
+
+    glBlitFramebuffer(
+        static_cast<GLint>(src_rect.left), static_cast<GLint>(src_rect.bottom),
+        static_cast<GLsizei>(src_rect.GetWidth()), static_cast<GLsizei>(src_rect.GetHeight()),
+        static_cast<GLint>(dst_rect.left), static_cast<GLint>(dst_rect.bottom),
+        static_cast<GLsizei>(dst_rect.GetWidth()), static_cast<GLsizei>(dst_rect.GetHeight()),
+        GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+    //glBlitFramebuffer(dst_tex, 0, GL_RGBA8, static_cast<GLint>(src_rect.left),
+    //                 static_cast<GLint>(src_rect.bottom), static_cast<GLsizei>(src_rect.GetWidth()),
+    //                 static_cast<GLsizei>(src_rect.GetHeight()), 0);
 
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 
-    // PBO now contains src_tex in RABG format
-    state.draw.shader_program = d24s8_abgr_shader.handle;
-    state.draw.vertex_array = attributeless_vao.handle;
-    state.viewport.x = static_cast<GLint>(dst_rect.left);
-    state.viewport.y = static_cast<GLint>(dst_rect.bottom);
-    state.viewport.width = static_cast<GLsizei>(dst_rect.GetWidth());
-    state.viewport.height = static_cast<GLsizei>(dst_rect.GetHeight());
-    state.Apply();
+    //// PBO now contains src_tex in RABG format
+    //state.draw.shader_program = d24s8_abgr_shader.handle;
+    //state.draw.vertex_array = attributeless_vao.handle;
+    //state.viewport.x = static_cast<GLint>(dst_rect.left);
+    //state.viewport.y = static_cast<GLint>(dst_rect.bottom);
+    //state.viewport.width = static_cast<GLsizei>(dst_rect.GetWidth());
+    //state.viewport.height = static_cast<GLsizei>(dst_rect.GetHeight());
+    //state.Apply();
 
-    OGLTexture tbo;
-    tbo.Create();
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_BUFFER, tbo.handle);
-    glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA8, d24s8_abgr_buffer.handle);
+    //OGLTexture tbo;
+    //tbo.Create();
+    //glActiveTexture(GL_TEXTURE0);
+    //glBindTexture(GL_TEXTURE_BUFFER, tbo.handle);
+    //glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA8, d24s8_abgr_buffer.handle);
 
-    glUniform2f(d24s8_abgr_tbo_size_u_id, static_cast<GLfloat>(src_rect.GetWidth()),
-                static_cast<GLfloat>(src_rect.GetHeight()));
-    glUniform4f(d24s8_abgr_viewport_u_id, static_cast<GLfloat>(state.viewport.x),
-                static_cast<GLfloat>(state.viewport.y), static_cast<GLfloat>(state.viewport.width),
-                static_cast<GLfloat>(state.viewport.height));
+    //glUniform2f(d24s8_abgr_tbo_size_u_id, static_cast<GLfloat>(src_rect.GetWidth()),
+    //            static_cast<GLfloat>(src_rect.GetHeight()));
+    //glUniform4f(d24s8_abgr_viewport_u_id, static_cast<GLfloat>(state.viewport.x),
+    //            static_cast<GLfloat>(state.viewport.y), static_cast<GLfloat>(state.viewport.width),
+    //            static_cast<GLfloat>(state.viewport.height));
 
-    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, dst_tex, 0);
-    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    //glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, dst_tex, 0);
+    //glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
+    //glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
-    glBindTexture(GL_TEXTURE_BUFFER, 0);
+    //glBindTexture(GL_TEXTURE_BUFFER, 0);
 }
 
 Surface RasterizerCacheOpenGL::GetSurface(const SurfaceParams& params, ScaleMatch match_res_scale,
@@ -1932,9 +1956,9 @@ void RasterizerCacheOpenGL::FlushRegion(PAddr addr, u32 size, Surface flush_surf
         return;
 
     const SurfaceInterval flush_interval(addr, addr + size);
-    SurfaceRegions flushed_intervals;
 
-    for (auto& pair : RangeFromInterval(dirty_regions, flush_interval)) {
+    auto ranges = RangeFromInterval(dirty_regions, flush_interval);
+    for (auto& pair : ranges) {
         // small sizes imply that this most likely comes from the cpu, flush the entire region
         // the point is to avoid thousands of small writes every frame if the cpu decides to access
         // that region, anything higher than 8 you're guaranteed it comes from a service
@@ -1956,7 +1980,10 @@ void RasterizerCacheOpenGL::FlushRegion(PAddr addr, u32 size, Surface flush_surf
         flushed_intervals += interval;
     }
     // Reset dirty regions
-    dirty_regions -= flushed_intervals;
+    if (!flushed_intervals.empty()) {
+        dirty_regions -= flushed_intervals;
+        flushed_intervals.clear();
+    }
 }
 
 void RasterizerCacheOpenGL::FlushAll() {
@@ -1977,7 +2004,8 @@ void RasterizerCacheOpenGL::InvalidateRegion(PAddr addr, u32 size, const Surface
         region_owner->invalid_regions.erase(invalid_interval);
     }
 
-    for (auto& pair : RangeFromInterval(surface_cache, invalid_interval)) {
+    auto ranges = RangeFromInterval(surface_cache, invalid_interval);
+    for (auto& pair : ranges) {
         for (auto& cached_surface : pair.second) {
             if (cached_surface == region_owner)
                 continue;
@@ -1994,7 +2022,7 @@ void RasterizerCacheOpenGL::InvalidateRegion(PAddr addr, u32 size, const Surface
             cached_surface->invalid_regions.insert(interval);
             cached_surface->InvalidateAllWatcher();
 
-            // Remove only "empty" fill surfaces to avoid destroying and recreating OGL textures
+            // Remove only "empty" fill surfaces to avoisd destroying and recreating OGL textures
             if (cached_surface->type == SurfaceType::Fill &&
                 cached_surface->IsSurfaceFullyInvalid()) {
                 remove_surfaces.emplace(cached_surface);
@@ -2002,31 +2030,77 @@ void RasterizerCacheOpenGL::InvalidateRegion(PAddr addr, u32 size, const Surface
         }
     }
 
-    if (region_owner != nullptr)
-        dirty_regions.set({invalid_interval, region_owner});
-    else
-        dirty_regions.erase(invalid_interval);
+    if (!remove_surfaces.empty()) {
+        if (region_owner != nullptr)
+            dirty_regions.set({invalid_interval, region_owner});
+        else
+            dirty_regions.erase(invalid_interval);
 
-    for (auto& remove_surface : remove_surfaces) {
-        if (remove_surface == region_owner) {
-            Surface expanded_surface = FindMatch<MatchFlags::SubRect | MatchFlags::Invalid>(
-                surface_cache, *region_owner, ScaleMatch::Ignore);
-            ASSERT(expanded_surface);
+        for (auto& remove_surface : remove_surfaces) {
+            if (remove_surface == region_owner) {
+                Surface expanded_surface = FindMatch<MatchFlags::SubRect | MatchFlags::Invalid>(
+                    surface_cache, *region_owner, ScaleMatch::Ignore);
+                ASSERT(expanded_surface);
 
-            if ((region_owner->invalid_regions - expanded_surface->invalid_regions).empty()) {
-                DuplicateSurface(region_owner, expanded_surface);
-            } else {
-                continue;
+                if ((region_owner->invalid_regions - expanded_surface->invalid_regions).empty()) {
+                    DuplicateSurface(region_owner, expanded_surface);
+                } else {
+                    continue;
+                }
             }
+            UnregisterSurface(remove_surface);
         }
-        UnregisterSurface(remove_surface);
-    }
 
-    remove_surfaces.clear();
+        remove_surfaces.clear();
+    }
 }
 
+template <typename T>
+class ObjPool {
+public:
+    ObjPool() {
+    }
+    ~ObjPool() {
+        for (; !m_pool.empty();) {
+            delete m_pool.back();
+            m_pool.pop_back();
+        }
+    }
+
+    T* Create() {
+        if (!m_pool.empty()) {
+            T* p = new (m_pool.back()) T();
+            m_pool.pop_back();
+            return p;
+        } else {
+            return new T();
+        }
+    }
+
+    void Release(T* p) {
+        m_pool.push_front(p);
+    }
+
+    std::shared_ptr<T> make_shared() {
+        std::shared_ptr<T> _Ret(
+            Create(), [&](T * p) {
+            this->Release(p); 
+        });
+        return _Ret;
+    }
+
+    size_t size() {
+        return m_pool.size();
+    }
+
+protected:
+    std::list<T*> m_pool;
+};
+
+ObjPool<CachedSurface> SurfacePool;
+
 Surface RasterizerCacheOpenGL::CreateSurface(const SurfaceParams& params) {
-    Surface surface = std::make_shared<CachedSurface>();
+    Surface surface = SurfacePool.make_shared();
     static_cast<SurfaceParams&>(*surface) = params;
 
     surface->texture.Create();

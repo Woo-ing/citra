@@ -316,39 +316,35 @@ std::tuple<MFOutputState, unique_mfptr<IMFSample>> ReceiveSample(IMFTransform* t
     return std::make_tuple(MFOutputState::OK, std::move(sample));
 }
 
-std::optional<std::vector<f32>> CopySampleToBuffer(IMFSample* sample) {
+void CopySampleToBuffer(IMFSample* sample, std::vector<f32>& output) {
     unique_mfptr<IMFMediaBuffer> buffer;
     HRESULT hr = S_OK;
-    std::optional<std::vector<f32>> output;
-    std::vector<f32> output_buffer;
     BYTE* data;
     DWORD len = 0;
 
     hr = sample->GetTotalLength(&len);
     if (FAILED(hr)) {
         ReportError("Failed to get the length of sample buffer", hr);
-        return std::nullopt;
+        return;
     }
 
     hr = sample->ConvertToContiguousBuffer(Amp(buffer));
     if (FAILED(hr)) {
         ReportError("Failed to get sample buffer", hr);
-        return std::nullopt;
+        return ;
     }
 
     hr = buffer->Lock(&data, nullptr, nullptr);
     if (FAILED(hr)) {
         ReportError("Failed to lock the buffer", hr);
-        return std::nullopt;
+        return ;
     }
 
-    output_buffer.resize(len / sizeof(f32));
-    std::memcpy(output_buffer.data(), data, len);
-    output = output_buffer;
+    output.resize(len / sizeof(f32));
+    std::memcpy(output.data(), data, len);
 
     // if buffer unlock fails, then... whatever, we have already got data
     buffer->Unlock();
-    return output;
 }
 
 namespace {

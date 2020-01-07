@@ -17,6 +17,10 @@ namespace FrameDumper {
 class Backend;
 }
 
+namespace OpenGL {
+class RasterizerOpenGL;
+}
+
 class RendererBase : NonCopyable {
 public:
     explicit RendererBase(Frontend::EmuWindow& window);
@@ -55,7 +59,7 @@ public:
         return m_current_frame;
     }
 
-    VideoCore::RasterizerInterface* Rasterizer() const {
+    OpenGL::RasterizerOpenGL* Rasterizer() const {
         return rasterizer.get();
     }
 
@@ -71,7 +75,7 @@ public:
 
 protected:
     Frontend::EmuWindow& render_window; ///< Reference to the render window handle.
-    std::unique_ptr<VideoCore::RasterizerInterface> rasterizer;
+    std::unique_ptr<OpenGL::RasterizerOpenGL> rasterizer;
     f32 m_current_fps = 0.0f; ///< Current framerate, should be set by the renderer
     int m_current_frame = 0;  ///< Current frame, should be set by the renderer
 

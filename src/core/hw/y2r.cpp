@@ -19,60 +19,149 @@ namespace HW::Y2R {
 
 using namespace Service::Y2R;
 
+inline s32 clamp(s32 value, s32 min, s32 max) {
+    return (value >= min) ? ((value <= max) ? value : max) : min;
+}
+
+struct Y2UTable {
+    //本表总共需要4*256*256 = 256K字节
+    u8 YV2R[256][256];
+    u8 YU2B[256][256];
+    u8 UV2IG[256][256];
+    u8 YIG2G[256][256];
+
+    Y2UTable(const StandardCoefficient coefficient) {
+        // This conversion process is bit-exact with hardware, as far as could be tested.
+        u32 index = static_cast<u32>(coefficient);
+        auto& c = Y2R_U::standard_coefficients[index];
+        const s32 rounding_offset = 0x18;
+
+        s32 minIG = 0;
+        s32 maxIG = c[2] * 255 + c[3] * 255 + 1;
+        for (s32 V = 0; V < 256; ++V) {
+            for (s32 U = 0; U < 256; ++U) {
+                s32 i = c[2] * V + c[3] * U;
+
+                UV2IG[U][V] = minIG + (i << 8) / maxIG;
+            }
+        }
+
+        for (s32 Y = 0; Y < 256; ++Y) {
+            s32 cY = c[0] * Y;
+            for (s32 V = 0; V < 256; ++V) {
+                s32 r = cY + c[1] * V;
+                r = (r >> 3) + c[5] + rounding_offset;
+                YV2R[Y][V] = clamp(r >> 5, 0, 0xFF);
+
+                for (s32 U = 0; U < 256; ++U) {
+                    s32 g = cY - c[2] * V - c[3] * U;
+                    g = (g >> 3) + c[6] + rounding_offset;
+                    YIG2G[Y][UV2IG[U][V]] = clamp(g >> 5, 0, 0xFF);
+                }
+            }
+            for (s32 U = 0; U < 256; ++U) {
+                s32 b = cY + c[4] * U;
+                b = (b >> 3) + c[7] + rounding_offset;
+                YU2B[Y][U] = clamp(b >> 5, 0, 0xFF);
+            }
+        }
+    }
+
+    inline u32 getRGB(u8 Y, u8 U, u8 V) {
+        return (YV2R[Y][V] << 24) | (YIG2G[Y][UV2IG[U][V]] << 16) | YU2B[Y][U] << 8;
+    }
+    inline void getRGB2(u8 Y1, u8 Y2, u8 U, u8 V, u32& p1, u32& p2) {
+        u8 uv2ig = UV2IG[U][V];
+        p1 = (YV2R[Y1][V] << 24) | (YIG2G[Y1][uv2ig] << 16) | YU2B[Y1][U] << 8;
+        p2 = (YV2R[Y2][V] << 24) | (YIG2G[Y2][uv2ig] << 16) | YU2B[Y2][U] << 8;
+    }
+};
+
 static const std::size_t MAX_TILES = 1024 / 8;
 static const std::size_t TILE_SIZE = 8 * 8;
 using ImageTile = std::array<u32, TILE_SIZE>;
+static std::vector<std::unique_ptr<Y2UTable>> Y2RTables(ARRAY_SIZE(Y2R_U::standard_coefficients));
 
 /// Converts a image strip from the source YUV format into individual 8x8 RGB32 tiles.
 static void ConvertYUVToRGB(InputFormat input_format, const u8* input_Y, const u8* input_U,
                             const u8* input_V, ImageTile output[], unsigned int width,
-                            unsigned int height, const CoefficientSet& coefficients) {
+                            unsigned int height, const StandardCoefficient coefficient) {
+    unsigned int YI = 0;
+    unsigned int UI = 0;
+    unsigned int VI = 0;
+    u8 Y, U, V = 0;
 
-    for (unsigned int y = 0; y < height; ++y) {
-        for (unsigned int x = 0; x < width; ++x) {
-            s32 Y = 0;
-            s32 U = 0;
-            s32 V = 0;
-            switch (input_format) {
-            case InputFormat::YUV422_Indiv8:
-            case InputFormat::YUV422_Indiv16:
-                Y = input_Y[y * width + x];
-                U = input_U[(y * width + x) / 2];
-                V = input_V[(y * width + x) / 2];
-                break;
-            case InputFormat::YUV420_Indiv8:
-            case InputFormat::YUV420_Indiv16:
-                Y = input_Y[y * width + x];
-                U = input_U[((y / 2) * width + x) / 2];
-                V = input_V[((y / 2) * width + x) / 2];
-                break;
-            case InputFormat::YUYV422_Interleaved:
-                Y = input_Y[(y * width + x) * 2];
-                U = input_Y[(y * width + (x / 2) * 2) * 2 + 1];
-                V = input_Y[(y * width + (x / 2) * 2) * 2 + 3];
-                break;
+    u32 index = static_cast<u32>(coefficient);
+    std::unique_ptr<Y2UTable>& table = Y2RTables[index];
+    if (table == nullptr) {
+        table = std::make_unique<Y2UTable>(coefficient);
+    }
+
+    switch (input_format) {
+    case InputFormat::YUV422_Indiv8:
+    case InputFormat::YUV422_Indiv16:
+        for (unsigned int y = 0; y < height; ++y) {
+            for (unsigned int x = 0; x < width; ++x) {
+                // Y = input_Y[y * width + x];
+                // U = input_U[(y * width + x) / 2];
+                // V = input_V[(y * width + x) / 2];
+                Y = input_Y[YI];
+                U = input_U[UI];
+                V = input_V[VI];
+                ++YI;
+                UI = VI = YI >> 1;
+
+                output[x >> 3][(y << 3) + (x & 7)] = table->getRGB(Y, U, V);
             }
-
-            // This conversion process is bit-exact with hardware, as far as could be tested.
-            auto& c = coefficients;
-            s32 cY = c[0] * Y;
-
-            s32 r = cY + c[1] * V;
-            s32 g = cY - c[2] * V - c[3] * U;
-            s32 b = cY + c[4] * U;
-
-            const s32 rounding_offset = 0x18;
-            r = (r >> 3) + c[5] + rounding_offset;
-            g = (g >> 3) + c[6] + rounding_offset;
-            b = (b >> 3) + c[7] + rounding_offset;
-
-            unsigned int tile = x / 8;
-            unsigned int tile_x = x % 8;
-            u32* out = &output[tile][y * 8 + tile_x];
-            *out = ((u32)std::clamp(r >> 5, 0, 0xFF) << 24) |
-                   ((u32)std::clamp(g >> 5, 0, 0xFF) << 16) |
-                   ((u32)std::clamp(b >> 5, 0, 0xFF) << 8);
         }
+        break;
+    case InputFormat::YUV420_Indiv8:
+    case InputFormat::YUV420_Indiv16:
+        for (unsigned int y = 0; y < height; ++y) {
+            for (unsigned int x = 0; x < width; x += 2) {
+                // Y = input_Y[y * width + x];
+                // U = input_U[((y / 2) * width + x) / 2];
+                // V = input_V[((y / 2) * width + x) / 2];
+                Y = input_Y[YI];
+                U = input_U[UI];
+                V = input_V[UI];
+                table->getRGB2(Y, input_Y[YI + 1], U, V, output[x >> 3][(y << 3) + (x & 7)],
+                               output[(x + 1) >> 3][(y << 3) + ((x + 1) & 7)]);
+                ++UI;
+                YI += 2;
+            }
+            UI -= width >> 1;
+            ++y;
+            for (unsigned int x = 0; x < width; x += 2) {
+                // Y = input_Y[y * width + x];
+                // U = input_U[((y / 2) * width + x) / 2];
+                // V = input_V[((y / 2) * width + x) / 2];
+                Y = input_Y[YI];
+                U = input_U[UI];
+                V = input_V[UI];
+                table->getRGB2(Y, input_Y[YI + 1], U, V, output[x >> 3][(y << 3) + (x & 7)],
+                               output[(x + 1) >> 3][(y << 3) + ((x + 1) & 7)]);
+                ++UI;
+                YI += 2;
+            }
+        }
+        break;
+    case InputFormat::YUYV422_Interleaved:
+        for (unsigned int y = 0; y < height; ++y) {
+            for (unsigned int x = 0; x < width; ++x) {
+                // Y = input_Y[(y * width + x) * 2];
+                // U = input_Y[(y * width + (x / 2) * 2) * 2 + 1];
+                // V = input_Y[(y * width + (x / 2) * 2) * 2 + 3];
+                UI = ((y * width + x & (~1)) << 1) + 1;
+                VI = UI + 2;
+                Y = input_Y[YI];
+                U = input_U[UI];
+                V = input_V[VI];
+                YI += 2;
+                output[x >> 3][(y << 3) + (x & 7)] = table->getRGB(Y, U, V);
+            }
+        }
+        break;
     }
 }
 
@@ -87,8 +176,12 @@ static void ReceiveData(Memory::MemorySystem& memory, u8* output, ConversionBuff
     ASSERT(amount_of_data % output_unit == 0);
 
     while (amount_of_data > 0) {
-        for (std::size_t i = 0; i < output_unit; ++i) {
-            output[i] = input[i * N];
+        if (N == 1) {
+            memmove(output, input, output_unit);
+        } else {
+            for (std::size_t i = 0; i < output_unit; ++i) {
+                output[i] = input[i * N];
+            }
         }
 
         output += output_unit;
@@ -106,38 +199,80 @@ static void SendData(Memory::MemorySystem& memory, const u32* input, ConversionB
                      int amount_of_data, OutputFormat output_format, u8 alpha) {
 
     u8* output = memory.GetPointer(buf.address);
+    switch (output_format) {
+    case OutputFormat::RGBA8:
+        while (amount_of_data > 0) {
+            u8* unit_end = output + buf.transfer_unit;
+            while (output < unit_end) {
+                u32 color = *input++;
+                Common::Vec4<u8> col_vec{(u8)(color >> 24), (u8)(color >> 16), (u8)(color >> 8),
+                                         alpha};
 
-    while (amount_of_data > 0) {
-        u8* unit_end = output + buf.transfer_unit;
-        while (output < unit_end) {
-            u32 color = *input++;
-            Common::Vec4<u8> col_vec{(u8)(color >> 24), (u8)(color >> 16), (u8)(color >> 8), alpha};
-
-            switch (output_format) {
-            case OutputFormat::RGBA8:
                 Color::EncodeRGBA8(col_vec, output);
                 output += 4;
-                break;
-            case OutputFormat::RGB8:
-                Color::EncodeRGB8(col_vec, output);
-                output += 3;
-                break;
-            case OutputFormat::RGB5A1:
-                Color::EncodeRGB5A1(col_vec, output);
-                output += 2;
-                break;
-            case OutputFormat::RGB565:
-                Color::EncodeRGB565(col_vec, output);
-                output += 2;
-                break;
+
+                amount_of_data -= 1;
             }
 
-            amount_of_data -= 1;
+            output += buf.gap;
+            buf.address += buf.transfer_unit + buf.gap;
+            buf.image_size -= buf.transfer_unit;
         }
+        break;
+    case OutputFormat::RGB8:
+        while (amount_of_data > 0) {
+            u8* unit_end = output + buf.transfer_unit;
+            while (output < unit_end) {
+                u32 color = *input++;
+                Common::Vec4<u8> col_vec{(u8)(color >> 24), (u8)(color >> 16), (u8)(color >> 8),
+                                         alpha};
+                Color::EncodeRGB8(col_vec, output);
+                output += 3;
 
-        output += buf.gap;
-        buf.address += buf.transfer_unit + buf.gap;
-        buf.image_size -= buf.transfer_unit;
+                amount_of_data -= 1;
+            }
+
+            output += buf.gap;
+            buf.address += buf.transfer_unit + buf.gap;
+            buf.image_size -= buf.transfer_unit;
+        }
+        break;
+    case OutputFormat::RGB5A1:
+        while (amount_of_data > 0) {
+            u8* unit_end = output + buf.transfer_unit;
+            while (output < unit_end) {
+                u32 color = *input++;
+                Common::Vec4<u8> col_vec{(u8)(color >> 24), (u8)(color >> 16), (u8)(color >> 8),
+                                         alpha};
+                Color::EncodeRGB5A1(col_vec, output);
+                output += 2;
+
+                amount_of_data -= 1;
+            }
+
+            output += buf.gap;
+            buf.address += buf.transfer_unit + buf.gap;
+            buf.image_size -= buf.transfer_unit;
+        }
+        break;
+    case OutputFormat::RGB565:
+        while (amount_of_data > 0) {
+            u8* unit_end = output + buf.transfer_unit;
+            while (output < unit_end) {
+                u32 color = *input++;
+                Common::Vec4<u8> col_vec{(u8)(color >> 24), (u8)(color >> 16), (u8)(color >> 8),
+                                         alpha};
+                Color::EncodeRGB565(col_vec, output);
+                output += 2;
+
+                amount_of_data -= 1;
+            }
+
+            output += buf.gap;
+            buf.address += buf.transfer_unit + buf.gap;
+            buf.image_size -= buf.transfer_unit;
+        }
+        break;
     }
 }
 
@@ -264,11 +399,11 @@ void PerformConversion(Memory::MemorySystem& memory, ConversionConfiguration& cv
     ASSERT(cvt.input_line_width % 8 == 0);
     ASSERT(cvt.block_alignment != BlockAlignment::Block8x8 || cvt.input_lines % 8 == 0);
     // Tiles per row
-    std::size_t num_tiles = cvt.input_line_width / 8;
+    std::size_t num_tiles = cvt.input_line_width >> 3;
     ASSERT(num_tiles <= MAX_TILES);
 
     // Buffer used as a CDMA source/target.
-    std::unique_ptr<u8[]> data_buffer(new u8[cvt.input_line_width * 8 * 4]);
+    std::unique_ptr<u8[]> data_buffer(new u8[cvt.input_line_width << 5]);
     // Intermediate storage for decoded 8x8 image tiles. Always stored as RGB32.
     std::unique_ptr<ImageTile[]> tiles(new ImageTile[num_tiles]);
     ImageTile tmp_tile;
@@ -292,41 +427,41 @@ void PerformConversion(Memory::MemorySystem& memory, ConversionConfiguration& cv
         const std::size_t row_data_size = row_height * cvt.input_line_width;
 
         u8* input_Y = data_buffer.get();
-        u8* input_U = input_Y + 8 * cvt.input_line_width;
-        u8* input_V = input_U + 8 * cvt.input_line_width / 2;
+        u8* input_U = input_Y + (cvt.input_line_width << 3);
+        u8* input_V = input_U + (cvt.input_line_width << 2);
 
         switch (cvt.input_format) {
         case InputFormat::YUV422_Indiv8:
             ReceiveData<1>(memory, input_Y, cvt.src_Y, row_data_size);
-            ReceiveData<1>(memory, input_U, cvt.src_U, row_data_size / 2);
-            ReceiveData<1>(memory, input_V, cvt.src_V, row_data_size / 2);
+            ReceiveData<1>(memory, input_U, cvt.src_U, row_data_size >> 1);
+            ReceiveData<1>(memory, input_V, cvt.src_V, row_data_size >> 1);
             break;
         case InputFormat::YUV420_Indiv8:
             ReceiveData<1>(memory, input_Y, cvt.src_Y, row_data_size);
-            ReceiveData<1>(memory, input_U, cvt.src_U, row_data_size / 4);
-            ReceiveData<1>(memory, input_V, cvt.src_V, row_data_size / 4);
+            ReceiveData<1>(memory, input_U, cvt.src_U, row_data_size >> 2);
+            ReceiveData<1>(memory, input_V, cvt.src_V, row_data_size >> 2);
             break;
         case InputFormat::YUV422_Indiv16:
             ReceiveData<2>(memory, input_Y, cvt.src_Y, row_data_size);
-            ReceiveData<2>(memory, input_U, cvt.src_U, row_data_size / 2);
-            ReceiveData<2>(memory, input_V, cvt.src_V, row_data_size / 2);
+            ReceiveData<2>(memory, input_U, cvt.src_U, row_data_size >> 1);
+            ReceiveData<2>(memory, input_V, cvt.src_V, row_data_size >> 1);
             break;
         case InputFormat::YUV420_Indiv16:
             ReceiveData<2>(memory, input_Y, cvt.src_Y, row_data_size);
-            ReceiveData<2>(memory, input_U, cvt.src_U, row_data_size / 4);
-            ReceiveData<2>(memory, input_V, cvt.src_V, row_data_size / 4);
+            ReceiveData<2>(memory, input_U, cvt.src_U, row_data_size >> 2);
+            ReceiveData<2>(memory, input_V, cvt.src_V, row_data_size >> 2);
             break;
         case InputFormat::YUYV422_Interleaved:
             input_U = nullptr;
             input_V = nullptr;
-            ReceiveData<1>(memory, input_Y, cvt.src_YUYV, row_data_size * 2);
+            ReceiveData<1>(memory, input_Y, cvt.src_YUYV, row_data_size << 1);
             break;
         }
 
         // Note(yuriks): If additional optimization is required, input_format can be moved to a
         // template parameter, so that its dispatch can be moved to outside the inner loop.
         ConvertYUVToRGB(cvt.input_format, input_Y, input_U, input_V, tiles.get(),
-                        cvt.input_line_width, row_height, cvt.coefficients);
+                        cvt.input_line_width, row_height, cvt.coefficient);
 
         u32* output_buffer = reinterpret_cast<u32*>(data_buffer.get());
 
@@ -343,7 +478,7 @@ void PerformConversion(Memory::MemorySystem& memory, ConversionConfiguration& cv
             case Rotation::Clockwise_90:
                 RotateTile90(tiles[i], tmp_tile, row_height, tile_remap);
                 image_strip_width = 8;
-                output_stride = 8 * row_height;
+                output_stride = row_height << 3;
                 break;
             case Rotation::Clockwise_180:
                 // For 180 and 270 degree rotations we also invert the order of tiles in the strip,
@@ -355,7 +490,7 @@ void PerformConversion(Memory::MemorySystem& memory, ConversionConfiguration& cv
             case Rotation::Clockwise_270:
                 RotateTile270(tiles[num_tiles - i - 1], tmp_tile, row_height, tile_remap);
                 image_strip_width = 8;
-                output_stride = 8 * row_height;
+                output_stride = row_height << 3;
                 break;
             }
 

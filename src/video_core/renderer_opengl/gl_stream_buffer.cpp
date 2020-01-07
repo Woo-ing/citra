@@ -72,14 +72,16 @@ std::tuple<u8*, GLintptr, bool> OGLStreamBuffer::Map(GLsizeiptr size, GLintptr a
     bool invalidate = false;
     if (buffer_pos + size > buffer_size) {
         buffer_pos = 0;
+
         invalidate = true;
 
-        if (persistent) {
-            glUnmapBuffer(gl_target);
-        }
+        //if (persistent) {
+        //    glUnmapBuffer(gl_target);
+        //}
     }
 
-    if (invalidate || !persistent) {
+    //if (invalidate || !persistent) {
+    if (!persistent) {
         MICROPROFILE_SCOPE(OpenGL_StreamBuffer);
         GLbitfield flags = GL_MAP_WRITE_BIT | (persistent ? GL_MAP_PERSISTENT_BIT : 0) |
                            (coherent ? GL_MAP_COHERENT_BIT : GL_MAP_FLUSH_EXPLICIT_BIT) |
@@ -104,6 +106,10 @@ void OGLStreamBuffer::Unmap(GLsizeiptr size) {
     }
 
     buffer_pos += size;
+}
+
+void OGLStreamBuffer::reset() {
+    buffer_pos = 0;
 }
 
 } // namespace OpenGL

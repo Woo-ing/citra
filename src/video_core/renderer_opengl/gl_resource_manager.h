@@ -132,6 +132,10 @@ public:
     /// Creates a new program from given shader soruce code
     void Create(const char* vert_shader, const char* frag_shader);
 
+    void Create(const std::vector<GLubyte>& bin);
+
+    void GetBin(std::vector<GLubyte>& bin);
+
     /// Deletes the internal OpenGL resource
     void Release();
 

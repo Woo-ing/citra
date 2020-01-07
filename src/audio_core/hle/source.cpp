@@ -294,15 +294,14 @@ bool Source::DequeueBuffer() {
         const unsigned num_channels = buf.mono_or_stereo == MonoOrStereo::Stereo ? 2 : 1;
         switch (buf.format) {
         case Format::PCM8:
-            state.current_buffer = Codec::DecodePCM8(num_channels, memory, buf.length);
+            Codec::DecodePCM8(num_channels, memory, buf.length, state.current_buffer);
             break;
         case Format::PCM16:
-            state.current_buffer = Codec::DecodePCM16(num_channels, memory, buf.length);
+            Codec::DecodePCM16(num_channels, memory, buf.length, state.current_buffer);
             break;
         case Format::ADPCM:
             DEBUG_ASSERT(num_channels == 1);
-            state.current_buffer =
-                Codec::DecodeADPCM(memory, buf.length, state.adpcm_coeffs, state.adpcm_state);
+            Codec::DecodeADPCM(memory, buf.length, state.adpcm_coeffs, state.adpcm_state, state.current_buffer);
             break;
         default:
             UNIMPLEMENTED();

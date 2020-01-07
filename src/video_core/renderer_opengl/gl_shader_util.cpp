@@ -48,7 +48,6 @@ GLuint LoadShader(const char* source, GLenum type) {
     glShaderSource(shader_id, static_cast<GLsizei>(src_arr.size()), src_arr.data(), nullptr);
     LOG_DEBUG(Render_OpenGL, "Compiling {} shader...", debug_type);
     glCompileShader(shader_id);
-
     GLint result = GL_FALSE;
     GLint info_log_length;
     glGetShaderiv(shader_id, GL_COMPILE_STATUS, &result);
@@ -90,6 +89,7 @@ GLuint LoadProgram(bool separable_program, const std::vector<GLuint>& shaders) {
     GLint result = GL_FALSE;
     GLint info_log_length;
     glGetProgramiv(program_id, GL_LINK_STATUS, &result);
+
     glGetProgramiv(program_id, GL_INFO_LOG_LENGTH, &info_log_length);
 
     if (info_log_length > 1) {
@@ -109,6 +109,50 @@ GLuint LoadProgram(bool separable_program, const std::vector<GLuint>& shaders) {
             glDetachShader(program_id, shader);
         }
     }
+
+    return program_id;
+}
+
+void GetProgramBin(GLuint program_id, std::vector<GLubyte>& bin) {
+    // Get the binary length
+    GLint length = 0;
+    glGetProgramiv(program_id, GL_PROGRAM_BINARY_LENGTH, &length);
+
+    // Retrieve the binary code
+    bin.resize(length + sizeof(GLenum));
+    GLenum format = 0;
+    glGetProgramBinary(program_id, length, NULL, (GLenum*)bin.data(),
+                       bin.data() + sizeof(GLenum));
+}
+
+GLuint LoadProgramBin(const std::vector<GLubyte>& bin) {
+    // Load the program bin
+    LOG_DEBUG(Render_OpenGL, "Load program bin...");
+
+    GLuint program_id = glCreateProgram();
+
+    // Install shader binary
+    glProgramBinary(program_id, *(GLenum*)bin.data(), bin.data() + sizeof(GLenum),
+                    bin.size() - sizeof(GLenum));
+
+    // Check the program
+    GLint result = GL_FALSE;
+    GLint info_log_length;
+    glGetProgramiv(program_id, GL_LINK_STATUS, &result);
+
+    glGetProgramiv(program_id, GL_INFO_LOG_LENGTH, &info_log_length);
+
+    if (info_log_length > 1) {
+        std::vector<char> program_error(info_log_length);
+        glGetProgramInfoLog(program_id, info_log_length, nullptr, &program_error[0]);
+        if (result == GL_TRUE) {
+            LOG_DEBUG(Render_OpenGL, "{}", &program_error[0]);
+        } else {
+            LOG_ERROR(Render_OpenGL, "Error linking shader:\n{}", &program_error[0]);
+        }
+    }
+
+    ASSERT_MSG(result == GL_TRUE, "Shader bin not loaded");
 
     return program_id;
 }

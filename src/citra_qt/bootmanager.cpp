@@ -123,8 +123,8 @@ void OpenGLWindow::Present() {
     context->makeCurrent(this);
     VideoCore::g_renderer->TryPresent(100);
     context->swapBuffers(this);
-    auto f = context->versionFunctions<QOpenGLFunctions_3_3_Core>();
-    f->glFinish();
+    //auto f = context->versionFunctions<QOpenGLFunctions_3_3_Core>();
+    //f->glFinish();
     QWindow::requestUpdate();
 }
 

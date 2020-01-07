@@ -36,6 +36,7 @@ void VertexLoader::Setup(const PipelineRegs& regs) {
         u32 offset = 0;
 
         // TODO: What happens if a loader overwrites a previous one's data?
+        std::array<u32, 12> components = loader_config.GetComponents();
         for (unsigned component = 0; component < loader_config.component_count; ++component) {
             if (component >= 12) {
                 LOG_ERROR(HW_GPU,
@@ -44,18 +45,20 @@ void VertexLoader::Setup(const PipelineRegs& regs) {
                 continue;
             }
 
-            u32 attribute_index = loader_config.GetComponent(component);
+            std::array<u32, 12> nums = attribute_config.GetNumElements();
+            std::array<PipelineRegs::VertexAttributeFormat, 12> formats =
+                attribute_config.GetFormats();
+            u32 attribute_index = components[component];
             if (attribute_index < 12) {
-                offset = Common::AlignUp(offset,
-                                         attribute_config.GetElementSizeInBytes(attribute_index));
+                PipelineRegs::VertexAttributeFormat format = formats[attribute_index];
+                u32 num = nums[attribute_index] + 1;
+                offset = Common::AlignUp(offset, attribute_config.GetElementSizeInBytes(formats[attribute_index]));
                 vertex_attribute_sources[attribute_index] = loader_config.data_offset + offset;
                 vertex_attribute_strides[attribute_index] =
                     static_cast<u32>(loader_config.byte_count);
-                vertex_attribute_formats[attribute_index] =
-                    attribute_config.GetFormat(attribute_index);
-                vertex_attribute_elements[attribute_index] =
-                    attribute_config.GetNumElements(attribute_index);
-                offset += attribute_config.GetStride(attribute_index);
+                vertex_attribute_formats[attribute_index] = format;
+                vertex_attribute_elements[attribute_index] = num;
+                offset += attribute_config.GetStride(format, num);
             } else if (attribute_index < 16) {
                 // Attribute ids 12, 13, 14 and 15 signify 4, 8, 12 and 16-byte paddings,
                 // respectively

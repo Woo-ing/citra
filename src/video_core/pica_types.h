@@ -49,7 +49,8 @@ public:
             hex = sign;
         }
 
-        std::memcpy(&res.value, &hex, sizeof(float));
+        // std::memcpy(&res.value, &hex, sizeof(float));
+        *(int*)&res.value = hex;
 
         return res;
     }

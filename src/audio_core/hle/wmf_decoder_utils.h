@@ -122,6 +122,6 @@ void MFFlush(IMFTransform* transform);
 MFInputState SendSample(IMFTransform* transform, DWORD in_stream_id, IMFSample* in_sample);
 std::tuple<MFOutputState, unique_mfptr<IMFSample>> ReceiveSample(IMFTransform* transform,
                                                                  DWORD out_stream_id);
-std::optional<std::vector<f32>> CopySampleToBuffer(IMFSample* sample);
+void CopySampleToBuffer(IMFSample* sample, std::vector<f32>& output);
 
 } // namespace MFDecoder

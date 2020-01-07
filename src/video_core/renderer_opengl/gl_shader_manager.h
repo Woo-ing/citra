@@ -98,7 +98,7 @@ public:
     ~ShaderProgramManager();
 
     bool UseProgrammableVertexShader(const PicaVSConfig& config,
-                                     const Pica::Shader::ShaderSetup setup);
+                                     const Pica::Shader::ShaderSetup& setup);
 
     void UseTrivialVertexShader();
 

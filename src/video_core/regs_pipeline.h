@@ -63,27 +63,27 @@ struct PipelineRegs {
             BitField<28, 4, u32> max_attribute_index;
         };
 
-        VertexAttributeFormat GetFormat(std::size_t n) const {
-            VertexAttributeFormat formats[] = {format0, format1, format2,  format3,
+        std::array<VertexAttributeFormat, 12> GetFormats() const {
+            std::array<VertexAttributeFormat, 12> formats = {format0, format1, format2,  format3,
                                                format4, format5, format6,  format7,
                                                format8, format9, format10, format11};
-            return formats[n];
+            return formats;
         }
 
-        u32 GetNumElements(std::size_t n) const {
-            u32 sizes[] = {size0, size1, size2, size3, size4,  size5,
+        std::array<u32, 12> GetNumElements() const {
+            std::array<u32, 12> sizes = {size0, size1, size2, size3, size4,  size5,
                            size6, size7, size8, size9, size10, size11};
-            return sizes[n] + 1;
+            return sizes;
         }
 
-        u32 GetElementSizeInBytes(std::size_t n) const {
-            return (GetFormat(n) == VertexAttributeFormat::FLOAT)
+        u32 GetElementSizeInBytes(VertexAttributeFormat format) const {
+            return (format == VertexAttributeFormat::FLOAT)
                        ? 4
-                       : (GetFormat(n) == VertexAttributeFormat::SHORT) ? 2 : 1;
+                       : (format == VertexAttributeFormat::SHORT) ? 2 : 1;
         }
 
-        u32 GetStride(std::size_t n) const {
-            return GetNumElements(n) * GetElementSizeInBytes(n);
+        u32 GetStride(VertexAttributeFormat format, u32 size) const {
+            return size * GetElementSizeInBytes(format);
         }
 
         bool IsDefaultAttribute(std::size_t id) const {
@@ -123,10 +123,10 @@ struct PipelineRegs {
                 BitField<28, 4, u32> component_count;
             };
 
-            u32 GetComponent(std::size_t n) const {
-                u32 components[] = {comp0, comp1, comp2, comp3, comp4,  comp5,
+            std::array<u32, 12> GetComponents() const {
+                std::array<u32, 12> components = {comp0, comp1, comp2, comp3, comp4,  comp5,
                                     comp6, comp7, comp8, comp9, comp10, comp11};
-                return components[n];
+                return components;
             }
         } attribute_loaders[12];
     } vertex_attributes;
